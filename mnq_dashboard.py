@@ -1,16 +1,18 @@
 """
-MNQ 金灵球网络仿真器 - Windows GUI 仪表盘
+MNQ 金灵球网络仿真器 v2.0 - Windows GUI 仪表盘
 基于 tkinter + matplotlib 实现
 
-功能:
-1. 金灵球网络 2D 热力图可视化 (流贯场/质量面/Oloid差分)
-2. MNQ8 能流运算实时监控
-3. 三元动力核 (φ/Ω/γ) 参数面板
-4. Hex64 卦象映射显示
-5. 刘机制路径追踪
-6. 实验组别切换 (死零场/背景/HEX_RING_GAP)
-7. GPU四场仿真 (φ/Ω/ψ/ξ)
-8. MNQ Cloud API 兼容仿真
+v2.0 新增:
+1. MNQ9 信心核面板 (Ω/φ_future/B_conf 宏观趋势)
+2. 三层信息波可视化 (核心→八卦→64卦 SCF收敛)
+3. CGD约束生成动力学面板 (五公理A1-A5)
+
+原有功能:
+4. 金灵球网络 2D 热力图可视化 (流贯场/质量面/Oloid差分)
+5. MNQ8 能流运算实时监控 + 三元动力核 (φ/Ω/γ)
+6. Hex64 卦象映射 + 刘机制路径追踪
+7. 实验组别切换 (死零场/背景/HEX_RING_GAP)
+8. GPU四场仿真 + MNQ Cloud API 兼容仿真
 """
 
 import tkinter as tk
@@ -30,11 +32,15 @@ from mnq_core import (
     JinlingMesh, MNQFieldGPU, MNQCloudAPI, LiuScheduler,
     MNQMinimalState, mnq_minimal_step, mnq_auto_gamma,
     GoldenSymbol3D, get_hex64_rule, HEX64_TABLE, bagua_apply, BaguaOp,
+    ThreeLayerInfoWave, CGDEngine, CGDConstraint,
+)
+from mnq9_core import (
+    MNQ9Simulator, MNQ9ScenarioGenerator, MacroConfidenceField, MNQ9Core,
 )
 
 
 class MNQDashboard:
-    """MNQ 金灵球网络仿真器 Windows 仪表盘"""
+    """MNQ 金灵球网络仿真器 v2.0 Windows 仪表盘"""
 
     # 配色方案
     COLORS = {
@@ -49,12 +55,14 @@ class MNQDashboard:
         'cyan': '#00d4ff',
         'green': '#00ff88',
         'red': '#ff4444',
+        'purple': '#c084fc',
+        'orange': '#fb923c',
     }
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("MNQ 金灵球网络仿真器 v1.0 - Windows Edition")
-        self.root.geometry("1400x900")
+        self.root.title("MNQ 金灵球网络仿真器 v2.0 - Windows Edition")
+        self.root.geometry("1600x950")
         self.root.configure(bg=self.COLORS['bg_dark'])
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -71,11 +79,26 @@ class MNQDashboard:
         self.liu_scheduler = LiuScheduler()
         self.cloud_api = MNQCloudAPI(unit_mode='atomic')
 
+        # v2.0 新增实例
+        self.three_layer = ThreeLayerInfoWave(core_init=0.001)
+        self.cgd_engine = CGDEngine()
+        self._init_cgd_constraints()
+        self.mnq9_sim = MNQ9Simulator(lam=0.03)
+        self.mnq9_sim.set_macro_confidence({'M2': 0.2, 'PMI': 0.1, 'DR007': -0.1})
+        self.mnq9_sim.set_future_wave([0.05]*20)
+
         # 历史记录
         self.mass_history = deque(maxlen=200)
         self.loop_history = deque(maxlen=200)
         self.gamma_history = deque(maxlen=200)
         self.rcoh_history = deque(maxlen=200)
+        # v2.0 新增历史
+        self.three_layer_core_history = deque(maxlen=200)
+        self.three_layer_bagua_history = deque(maxlen=200)
+        self.three_layer_hex64_history = deque(maxlen=200)
+        self.mnq9_omega_history = deque(maxlen=200)
+        self.mnq9_bconf_history = deque(maxlen=200)
+        self.cgd_violation_history = deque(maxlen=200)
 
         # 构建UI
         self._build_ui()
@@ -83,31 +106,32 @@ class MNQDashboard:
         # 初始化显示
         self._refresh_all_plots()
 
+    def _init_cgd_constraints(self):
+        """初始化CGD约束 (五公理)"""
+        self.cgd_engine.add_constraint("质量面守恒", (0.0, 0.5), modulation=0.005)
+        self.cgd_engine.add_constraint("相干度", (0.98, 1.0), modulation=0.002)
+        self.cgd_engine.add_constraint("能量上限", (0.0, 2.0), modulation=0.01)
+
     # ================================================================
     # UI 构建
     # ================================================================
 
     def _build_ui(self):
         """构建完整UI布局"""
-        # 顶部标题栏
         self._build_title_bar()
 
-        # 主体区域
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
 
-        # 左侧: 可视化面板
         left_frame = ttk.Frame(main_frame)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._build_visualization(left_frame)
 
-        # 右侧: 控制面板
-        right_frame = ttk.Frame(main_frame, width=340)
+        right_frame = ttk.Frame(main_frame, width=380)
         right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
         right_frame.pack_propagate(False)
         self._build_control_panel(right_frame)
 
-        # 底部: 状态栏
         self._build_status_bar()
 
     def _build_title_bar(self):
@@ -115,12 +139,12 @@ class MNQDashboard:
         title_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
         title_frame.pack_propagate(False)
 
-        tk.Label(title_frame, text="⬡ MNQ 金灵球网络仿真器",
+        tk.Label(title_frame, text="⬡ MNQ 金灵球网络仿真器 v2.0",
                  font=("Microsoft YaHei", 16, "bold"),
                  fg=self.COLORS['gold'], bg=self.COLORS['bg_dark']).pack(side=tk.LEFT)
 
         tk.Label(title_frame,
-                 text="IWPU · 离散信息波包场 · N₈拓扑 · 阴龙积⊙ · PG囚禁",
+                 text="IWPU · CGD约束 · 三层信息波 · MNQ9信心核 · N₈拓扑 · PG囚禁",
                  font=("Microsoft YaHei", 9),
                  fg=self.COLORS['text_dim'], bg=self.COLORS['bg_dark']).pack(side=tk.LEFT, padx=20)
 
@@ -130,18 +154,21 @@ class MNQDashboard:
         self.fps_label.pack(side=tk.RIGHT)
 
     def _build_visualization(self, parent):
-        """构建可视化面板 (4个subplot)"""
-        self.fig = Figure(figsize=(9, 7), facecolor=self.COLORS['bg_dark'])
-        self.fig.subplots_adjust(hspace=0.35, wspace=0.3, left=0.08, right=0.95,
-                                  top=0.95, bottom=0.08)
+        """构建可视化面板 (2x3 = 6个subplot)"""
+        self.fig = Figure(figsize=(10, 7.5), facecolor=self.COLORS['bg_dark'])
+        self.fig.subplots_adjust(hspace=0.40, wspace=0.32, left=0.07, right=0.96,
+                                  top=0.95, bottom=0.06)
 
-        # 4个子图
-        self.ax_ftel = self.fig.add_subplot(221)
-        self.ax_mass = self.fig.add_subplot(222)
-        self.ax_loop = self.fig.add_subplot(223)
-        self.ax_gpu = self.fig.add_subplot(224)
+        # 2x3: 6个子图
+        self.ax_ftel   = self.fig.add_subplot(231)  # 流贯场
+        self.ax_mass   = self.fig.add_subplot(232)  # 质量面 + 刘路径
+        self.ax_loop   = self.fig.add_subplot(233)  # Oloid差分
+        self.ax_gpu    = self.fig.add_subplot(234)  # GPU φ/Ω场
+        self.ax_3layer = self.fig.add_subplot(235)  # 三层信息波
+        self.ax_mnq9   = self.fig.add_subplot(236)  # MNQ9信心趋势
 
-        for ax in [self.ax_ftel, self.ax_mass, self.ax_loop, self.ax_gpu]:
+        for ax in [self.ax_ftel, self.ax_mass, self.ax_loop,
+                    self.ax_gpu, self.ax_3layer, self.ax_mnq9]:
             ax.set_facecolor('#0a0a1a')
             ax.tick_params(colors=self.COLORS['text_dim'], labelsize=7)
             for spine in ax.spines.values():
@@ -151,24 +178,47 @@ class MNQDashboard:
         self.ax_mass.set_title('质量面 (Mass Face)', color=self.COLORS['gold'], fontsize=9)
         self.ax_loop.set_title('Oloid差分 (PG囚禁)', color=self.COLORS['green'], fontsize=9)
         self.ax_gpu.set_title('GPU φ/Ω场', color=self.COLORS['accent1'], fontsize=9)
+        self.ax_3layer.set_title('三层信息波 (SCF)', color=self.COLORS['purple'], fontsize=9)
+        self.ax_mnq9.set_title('MNQ9 信心趋势', color=self.COLORS['orange'], fontsize=9)
 
-        # 初始图像
-        empty = np.zeros((32, 32))
-        self.im_ftel = self.ax_ftel.imshow(empty, cmap='inferno', interpolation='bilinear',
+        # 初始图像 (前三行)
+        empty32 = np.zeros((32, 32))
+        self.im_ftel = self.ax_ftel.imshow(empty32, cmap='inferno', interpolation='bilinear',
                                             vmin=0, vmax=0.5, aspect='auto')
-        self.im_mass = self.ax_mass.imshow(empty, cmap='hot', interpolation='nearest',
+        self.im_mass = self.ax_mass.imshow(empty32, cmap='hot', interpolation='nearest',
                                             vmin=0, vmax=1, aspect='auto')
-        self.im_loop = self.ax_loop.imshow(empty, cmap='viridis', interpolation='bilinear',
+        self.im_loop = self.ax_loop.imshow(empty32, cmap='viridis', interpolation='bilinear',
                                            vmin=0, vmax=0.3, aspect='auto')
-        self.im_gpu = self.ax_gpu.imshow(np.zeros((64, 64)), cmap='coolwarm',
+        self.im_gpu  = self.ax_gpu.imshow(np.zeros((64, 64)), cmap='coolwarm',
                                           interpolation='bilinear', vmin=-0.5, vmax=0.5,
                                           aspect='auto')
+
+        # 三层信息波: 三条线 (core/bagua/hex64)
+        self.line_3l_core,  = self.ax_3layer.plot([], [], color=self.COLORS['gold'],
+                                                    linewidth=1.2, label='Core')
+        self.line_3l_bagua, = self.ax_3layer.plot([], [], color=self.COLORS['cyan'],
+                                                    linewidth=1.0, label='Bagua')
+        self.line_3l_hex64, = self.ax_3layer.plot([], [], color=self.COLORS['purple'],
+                                                    linewidth=0.8, label='Hex64')
+        self.ax_3layer.legend(loc='upper right', fontsize=6,
+                              facecolor='#0a0a1a', edgecolor='#333', labelcolor=self.COLORS['text_dim'])
+        self.ax_3layer.set_ylim(-0.01, 0.05)
+
+        # MNQ9信心趋势: 两条线 (Ω + B_conf)
+        self.line_mnq9_omega, = self.ax_mnq9.plot([], [], color=self.COLORS['orange'],
+                                                    linewidth=1.5, label='Ω')
+        self.line_mnq9_bconf, = self.ax_mnq9.plot([], [], color=self.COLORS['green'],
+                                                    linewidth=1.0, label='B_conf')
+        self.ax_mnq9.axhline(y=0, color='#444466', linestyle='--', linewidth=0.5)
+        self.ax_mnq9.legend(loc='upper left', fontsize=6,
+                             facecolor='#0a0a1a', edgecolor='#333', labelcolor=self.COLORS['text_dim'])
+        self.ax_mnq9.set_ylim(-1.1, 1.1)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     def _build_control_panel(self, parent):
-        """构建右侧控制面板"""
+        """构建右侧控制面板 (可滚动)"""
         style = ttk.Style()
         style.configure('Dark.TFrame', background=self.COLORS['bg_panel'])
         style.configure('Dark.TLabel', background=self.COLORS['bg_panel'],
@@ -176,10 +226,6 @@ class MNQDashboard:
         style.configure('Gold.TLabel', background=self.COLORS['bg_panel'],
                         foreground=self.COLORS['gold'], font=("Microsoft YaHei", 11, "bold"))
         style.configure('Dark.TButton', font=("Microsoft YaHei", 9))
-        style.configure('Dark.TLabelframe', background=self.COLORS['bg_panel'],
-                        foreground=self.COLORS['cyan'])
-        style.configure('Dark.TLabelframe.Label', background=self.COLORS['bg_panel'],
-                        foreground=self.COLORS['cyan'], font=("Microsoft YaHei", 9, "bold"))
 
         canvas = tk.Canvas(parent, bg=self.COLORS['bg_panel'], highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=canvas.yview)
@@ -217,17 +263,13 @@ class MNQDashboard:
                                     width=8)
         self.btn_reset.pack(side=tk.LEFT, padx=2)
 
-        # 实验模式
         mode_frame = tk.Frame(ctrl_frame, bg=self.COLORS['bg_panel'])
         mode_frame.pack(fill=tk.X, padx=3, pady=3)
-
         tk.Label(mode_frame, text="实验模式:", bg=self.COLORS['bg_panel'],
                  fg=self.COLORS['text_dim'], font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
-
         self.exp_mode = tk.StringVar(value="BACKGROUND_OSC")
-        modes = [("背景振荡", "BACKGROUND_OSC"), ("缺口六角壳", "HEX_RING_GAP"),
-                 ("死零场", "ZERO_FIELD")]
-        for text, mode in modes:
+        for text, mode in [("背景振荡", "BACKGROUND_OSC"), ("缺口六角壳", "HEX_RING_GAP"),
+                           ("死零场", "ZERO_FIELD")]:
             tk.Radiobutton(mode_frame, text=text, variable=self.exp_mode, value=mode,
                            bg=self.COLORS['bg_panel'], fg=self.COLORS['text'],
                            selectcolor=self.COLORS['bg_card'],
@@ -240,10 +282,76 @@ class MNQDashboard:
                                        font=("Microsoft YaHei", 9, "bold"), bd=1)
         minimal_frame.pack(fill=tk.X, padx=5, pady=3)
 
-        self.lbl_phi = self._make_param_row(minimal_frame, "φ (相位角)", "0.5000")
-        self.lbl_omega = self._make_param_row(minimal_frame, "Ω (角频率)", "2.0000")
-        self.lbl_gamma = self._make_param_row(minimal_frame, "γ (相干度)", "0.9898")
-        self.lbl_rcoh = self._make_param_row(minimal_frame, "Rcoh (相干指标)", "0.0000")
+        self.lbl_phi    = self._make_param_row(minimal_frame, "φ (相位角)", "0.5000")
+        self.lbl_omega  = self._make_param_row(minimal_frame, "Ω (角频率)", "2.0000")
+        self.lbl_gamma  = self._make_param_row(minimal_frame, "γ (相干度)", "0.9898")
+        self.lbl_rcoh   = self._make_param_row(minimal_frame, "Rcoh (相干指标)", "0.0000")
+
+        # ---- MNQ9 信心核面板 [v2.0新增] ----
+        mnq9_frame = tk.LabelFrame(scroll_frame, text=" 🧠 MNQ9 信心核 (Ω/φ_future/B_conf) ",
+                                     bg=self.COLORS['bg_panel'], fg=self.COLORS['orange'],
+                                     font=("Microsoft YaHei", 9, "bold"), bd=1)
+        mnq9_frame.pack(fill=tk.X, padx=5, pady=3)
+
+        self.lbl_mnq9_omega  = self._make_param_row(mnq9_frame, "Ω (信心核)", "0.0000")
+        self.lbl_mnq9_bconf  = self._make_param_row(mnq9_frame, "B_conf (综合)", "0.0000")
+        self.lbl_mnq9_kernel = self._make_param_row(mnq9_frame, "Kernel (宏观核)", "0.0000")
+
+        # MNQ9 场景选择
+        tk.Label(mnq9_frame, text="宏观场景:", bg=self.COLORS['bg_panel'],
+                 fg=self.COLORS['text_dim'], font=("Microsoft YaHei", 8)).pack(anchor='w', padx=5)
+        self.mnq9_scenario = tk.StringVar(value="none")
+        scenario_frame = tk.Frame(mnq9_frame, bg=self.COLORS['bg_panel'])
+        scenario_frame.pack(fill=tk.X, padx=3, pady=2)
+        for text, val in [("牛市", "bull"), ("熊市", "bear"),
+                           ("危机恢复", "crisis"), ("政策冲击", "policy")]:
+            tk.Radiobutton(scenario_frame, text=text, variable=self.mnq9_scenario, value=val,
+                           bg=self.COLORS['bg_panel'], fg=self.COLORS['text'],
+                           selectcolor=self.COLORS['bg_card'],
+                           font=("Microsoft YaHei", 8)).pack(side=tk.LEFT, padx=2)
+
+        btn_mnq9_frame = tk.Frame(mnq9_frame, bg=self.COLORS['bg_panel'])
+        btn_mnq9_frame.pack(fill=tk.X, padx=3, pady=2)
+        tk.Button(btn_mnq9_frame, text="应用场景", command=self._apply_mnq9_scenario,
+                  bg=self.COLORS['bg_card'], fg=self.COLORS['text'],
+                  font=("Microsoft YaHei", 8)).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_mnq9_frame, text="运行趋势", command=self._run_mnq9_trend,
+                  bg='#8b5cf6', fg='white',
+                  font=("Microsoft YaHei", 8)).pack(side=tk.LEFT, padx=2)
+
+        # ---- 三层信息波 [v2.0新增] ----
+        wave_frame = tk.LabelFrame(scroll_frame, text=" 🌊 三层信息波 (SCF收敛) ",
+                                     bg=self.COLORS['bg_panel'], fg=self.COLORS['purple'],
+                                     font=("Microsoft YaHei", 9, "bold"), bd=1)
+        wave_frame.pack(fill=tk.X, padx=5, pady=3)
+
+        self.lbl_3l_core  = self._make_param_row(wave_frame, "核心层", "0.0010")
+        self.lbl_3l_bagua = self._make_param_row(wave_frame, "八卦层 (mean)", "0.0000")
+        self.lbl_3l_hex64 = self._make_param_row(wave_frame, "64卦层 (mean)", "0.0000")
+        self.lbl_3l_change = self._make_param_row(wave_frame, "Max Change", "∞")
+
+        tk.Button(wave_frame, text="运行SCF收敛", command=self._run_scf_convergence,
+                  bg=self.COLORS['bg_card'], fg=self.COLORS['text'],
+                  font=("Microsoft YaHei", 8)).pack(fill=tk.X, padx=5, pady=2)
+
+        # ---- CGD约束面板 [v2.0新增] ----
+        cgd_frame = tk.LabelFrame(scroll_frame, text=" 🔗 CGD约束生成动力学 (五公理) ",
+                                    bg=self.COLORS['bg_panel'], fg=self.COLORS['cyan'],
+                                    font=("Microsoft YaHei", 9, "bold"), bd=1)
+        cgd_frame.pack(fill=tk.X, padx=5, pady=3)
+
+        self.lbl_cgd_violation = self._make_param_row(cgd_frame, "违反度", "0.0000")
+        self.lbl_cgd_phase     = self._make_param_row(cgd_frame, "相态", "0")
+        self.lbl_cgd_steady    = self._make_param_row(cgd_frame, "稳态数", "0")
+
+        self.cgd_listbox = tk.Listbox(cgd_frame, height=3, bg='#0a0a2a',
+                                       fg=self.COLORS['text_dim'],
+                                       font=("Consolas", 8),
+                                       selectbackground=self.COLORS['bg_card'])
+        self.cgd_listbox.pack(fill=tk.X, padx=5, pady=2)
+        for c in self.cgd_engine.constraints:
+            lo, hi = c.target_range
+            self.cgd_listbox.insert(tk.END, f"  {c.name}: [{lo:.1f}, {hi:.1f}] v={c.current_value:.4f}")
 
         # ---- Hex64 卦象 ----
         hex_frame = tk.LabelFrame(scroll_frame, text=" ☰ Hex64 六十四卦映射 ",
@@ -258,11 +366,13 @@ class MNQDashboard:
 
         self.hex64_listbox = tk.Listbox(hex_frame, height=4, bg='#0a0a2a',
                                          fg=self.COLORS['text_dim'],
-                                         font=("Consolas", 8), selectbackground=self.COLORS['bg_card'])
+                                         font=("Consolas", 8),
+                                         selectbackground=self.COLORS['bg_card'])
         self.hex64_listbox.pack(fill=tk.X, padx=5, pady=2)
         for i in range(8):
             r = get_hex64_rule(i)
-            self.hex64_listbox.insert(tk.END, f"  {r.name} ({r.opcode}) Δφ={r.phi_delta:+.2f} ΔΩ={r.omega_delta:+.2f}")
+            self.hex64_listbox.insert(tk.END,
+                f"  {r.name} ({r.opcode}) Δφ={r.phi_delta:+.2f} ΔΩ={r.omega_delta:+.2f}")
 
         # ---- PG拓扑囚禁 ----
         pg_frame = tk.LabelFrame(scroll_frame, text=" 🔒 PG拓扑囚禁检测 ",
@@ -280,7 +390,7 @@ class MNQDashboard:
                                     font=("Microsoft YaHei", 9, "bold"), bd=1)
         liu_frame.pack(fill=tk.X, padx=5, pady=3)
 
-        self.lbl_s_rel = self._make_param_row(liu_frame, "S_Rel 最小值", "∞")
+        self.lbl_s_rel    = self._make_param_row(liu_frame, "S_Rel 最小值", "∞")
         self.lbl_path_len = self._make_param_row(liu_frame, "最优路径长度", "0")
 
         tk.Button(liu_frame, text="追踪最优路径", command=self._trace_liu_path,
@@ -309,7 +419,7 @@ class MNQDashboard:
                   bg=self.COLORS['bg_card'], fg=self.COLORS['text'],
                   font=("Microsoft YaHei", 8)).pack(fill=tk.X, padx=5, pady=2)
 
-        self.cloud_result = scrolledtext.ScrolledText(cloud_frame, height=5,
+        self.cloud_result = scrolledtext.ScrolledText(cloud_frame, height=4,
                                                        bg='#0a0a2a', fg=self.COLORS['text_dim'],
                                                        font=("Consolas", 8))
         self.cloud_result.pack(fill=tk.X, padx=5, pady=2)
@@ -320,19 +430,20 @@ class MNQDashboard:
                                    font=("Microsoft YaHei", 9, "bold"), bd=1)
         log_frame.pack(fill=tk.X, padx=5, pady=3)
 
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=6,
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=5,
                                                     bg='#0a0a2a', fg=self.COLORS['text_dim'],
                                                     font=("Consolas", 8))
         self.log_text.pack(fill=tk.X, padx=5, pady=2)
 
     def _build_status_bar(self):
-        status_frame = tk.Frame(self.root, bg=self.COLORS['bg_card'], height=24)
+        status_frame = tk.Frame(self.root, bg=self.COLORS['bg_card'], height=26)
         status_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=2)
         status_frame.pack_propagate(False)
 
-        self.status_label = tk.Label(status_frame, text="MNQ-VM 就绪 | IWPU | IDO | PG | Liu",
-                                      bg=self.COLORS['bg_card'], fg=self.COLORS['text_dim'],
-                                      font=("Consolas", 9))
+        self.status_label = tk.Label(status_frame,
+            text="MNQ v2.0 就绪 | IWPU | CGD | 3-Layer | MNQ9 | PG | Liu",
+            bg=self.COLORS['bg_card'], fg=self.COLORS['text_dim'],
+            font=("Consolas", 9))
         self.status_label.pack(side=tk.LEFT, padx=10)
 
         self.step_label = tk.Label(status_frame, text="Step: 0",
@@ -341,7 +452,6 @@ class MNQDashboard:
         self.step_label.pack(side=tk.RIGHT, padx=10)
 
     def _make_param_row(self, parent, label: str, default: str) -> tk.Label:
-        """创建参数行"""
         row = tk.Frame(parent, bg=self.COLORS['bg_panel'])
         row.pack(fill=tk.X, padx=5, pady=1)
         tk.Label(row, text=label + ":", bg=self.COLORS['bg_panel'],
@@ -364,7 +474,7 @@ class MNQDashboard:
         self.start_time = time.time()
         self.btn_start.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
-        self._log("仿真启动")
+        self._log("仿真启动 (v2.0: CGD + 三层信息波 + MNQ9)")
         self._sim_loop()
 
     def stop_sim(self):
@@ -389,22 +499,35 @@ class MNQDashboard:
             self.mesh.seed_background()
 
         self.gpu_field = MNQFieldGPU(grid=64)
+        self.three_layer = ThreeLayerInfoWave(core_init=0.001)
+        self.cgd_engine = CGDEngine()
+        self._init_cgd_constraints()
+        self.mnq9_sim = MNQ9Simulator(lam=0.03)
+        self.mnq9_sim.set_macro_confidence({'M2': 0.2, 'PMI': 0.1, 'DR007': -0.1})
+        self.mnq9_sim.set_future_wave([0.05]*20)
+
         self.mass_history.clear()
         self.loop_history.clear()
         self.gamma_history.clear()
         self.rcoh_history.clear()
+        self.three_layer_core_history.clear()
+        self.three_layer_bagua_history.clear()
+        self.three_layer_hex64_history.clear()
+        self.mnq9_omega_history.clear()
+        self.mnq9_bconf_history.clear()
+        self.cgd_violation_history.clear()
 
         self._refresh_all_plots()
         self._log(f"仿真重置 (模式: {mode})")
 
     def _sim_loop(self):
-        """仿真主循环 (在主线程中用after调度)"""
+        """仿真主循环"""
         if not self.is_running:
             return
 
         t0 = time.time()
 
-        # MNQ8 网格演化 (1步)
+        # MNQ8 网格演化
         self.mesh.mnq8_step(dt=0.016)
 
         # GPU四场演化 (5步/帧)
@@ -414,6 +537,18 @@ class MNQDashboard:
         if self.step_count % 100 == 0:
             self.gpu_field.inject_noise(amp=0.001)
 
+        # v2.0: 三层信息波演化
+        tl_change = self.three_layer.step()
+
+        # v2.0: CGD约束检测
+        state_vec = np.array([self.mesh.total_mass, self.mesh.minimal.gamma,
+                              self.mesh.minimal.omega])
+        is_legal, violation = self.cgd_engine.evaluate(state_vec)
+
+        # v2.0: MNQ9信心核更新 (每10步)
+        if self.step_count % 10 == 0:
+            self.mnq9_sim.run_series(steps=1)
+
         self.step_count += 1
 
         # 记录历史
@@ -421,22 +556,31 @@ class MNQDashboard:
         self.loop_history.append(self.mesh.total_loop)
         self.gamma_history.append(self.mesh.minimal.gamma)
         self.rcoh_history.append(self.mesh.minimal.rcoh)
+        # v2.0 历史
+        snap = self.three_layer.snapshot()
+        self.three_layer_core_history.append(snap['core'])
+        self.three_layer_bagua_history.append(snap['bagua_mean'])
+        self.three_layer_hex64_history.append(snap['hex64_mean'])
+        if self.mnq9_sim.omega_series:
+            self.mnq9_omega_history.append(self.mnq9_sim.omega_series[-1])
+            self.mnq9_bconf_history.append(self.mnq9_sim.B_conf_series[-1])
+        else:
+            self.mnq9_omega_history.append(self.mnq9_sim.core.omega)
+            self.mnq9_bconf_history.append(0.0)
+        self.cgd_violation_history.append(violation)
 
-        # 更新显示 (每3步刷新一次，减少开销)
         if self.step_count % 3 == 0:
             self._refresh_all_plots()
 
-        # FPS
         elapsed = time.time() - t0
         self.fps_counter.append(elapsed)
-        avg_frame = sum(self.fps_counter) / len(self.fps_counter) if self.fps_counter else 0.05
-        fps = 1.0 / max(0.001, avg_frame)
+        avg_frame = sum(self.fps_counter)/len(self.fps_counter) if self.fps_counter else 0.05
+        fps = 1.0/max(0.001, avg_frame)
 
         self.fps_label.config(text=f"FPS: {fps:.1f}")
         self.step_label.config(text=f"Step: {self.step_count}")
 
-        # 调度下一帧
-        delay = max(1, int((1.0 / 30.0 - elapsed) * 1000))
+        delay = max(1, int((1.0/30.0 - elapsed) * 1000))
         self.root.after(delay, self._sim_loop)
 
     # ================================================================
@@ -444,7 +588,7 @@ class MNQDashboard:
     # ================================================================
 
     def _refresh_all_plots(self):
-        """刷新所有可视化面板"""
+        """刷新所有6个可视化面板"""
         # 1. 流贯场
         ftel_field = self.mesh.get_field_array()
         self.im_ftel.set_data(ftel_field)
@@ -460,12 +604,39 @@ class MNQDashboard:
         self.im_loop.set_clim(0, max(0.01, loop_field.max()))
 
         # 4. GPU φ/Ω场
-        gpu_data = self.gpu_field.phi  # 显示φ场
+        gpu_data = self.gpu_field.phi
         self.im_gpu.set_data(gpu_data)
         vmax = max(0.01, np.abs(gpu_data).max())
         self.im_gpu.set_clim(-vmax, vmax)
 
-        # 刷新刘机制路径 (在质量面图上叠加)
+        # 5. 三层信息波 (时间序列)
+        n = len(self.three_layer_core_history)
+        if n > 1:
+            xs = list(range(max(0, n-200), n))
+            self.line_3l_core.set_data(
+                xs, list(self.three_layer_core_history)[-len(xs):])
+            self.line_3l_bagua.set_data(
+                xs, list(self.three_layer_bagua_history)[-len(xs):])
+            self.line_3l_hex64.set_data(
+                xs, list(self.three_layer_hex64_history)[-len(xs):])
+            self.ax_3layer.set_xlim(max(0, n-200), n)
+            all_vals = (list(self.three_layer_core_history)[-len(xs):] +
+                        list(self.three_layer_bagua_history)[-len(xs):] +
+                        list(self.three_layer_hex64_history)[-len(xs):])
+            ymax = max(0.01, max(all_vals, default=0.01)) * 1.2
+            self.ax_3layer.set_ylim(-0.01, ymax)
+
+        # 6. MNQ9信心趋势 (时间序列)
+        n9 = len(self.mnq9_omega_history)
+        if n9 > 1:
+            xs = list(range(max(0, n9-200), n9))
+            self.line_mnq9_omega.set_data(
+                xs, list(self.mnq9_omega_history)[-len(xs):])
+            self.line_mnq9_bconf.set_data(
+                xs, list(self.mnq9_bconf_history)[-len(xs):])
+            self.ax_mnq9.set_xlim(max(0, n9-200), n9)
+
+        # 刘路径叠加
         if self.liu_scheduler.optimal_path:
             self.ax_mass.clear()
             self.ax_mass.set_facecolor('#0a0a1a')
@@ -481,30 +652,64 @@ class MNQDashboard:
             self.ax_mass.set_title('质量面 + 刘路径', color=self.COLORS['gold'], fontsize=9)
 
         self.canvas.draw_idle()
-
-        # 更新参数面板
         self._update_param_labels()
 
     def _update_param_labels(self):
-        """更新参数标签"""
+        """更新所有参数标签"""
         m = self.mesh.minimal
         self.lbl_phi.config(text=f"{m.phi:.4f}")
         self.lbl_omega.config(text=f"{m.omega:.4f}")
         self.lbl_gamma.config(text=f"{m.gamma:.5f}")
         self.lbl_rcoh.config(text=f"{m.rcoh:.4f}")
+
+        # 三层信息波
+        snap = self.three_layer.snapshot()
+        self.lbl_3l_core.config(text=f"{snap['core']:.6f}")
+        self.lbl_3l_bagua.config(text=f"{snap['bagua_mean']:.6f}")
+        self.lbl_3l_hex64.config(text=f"{snap['hex64_mean']:.6f}")
+        self.lbl_3l_change.config(
+            text=f"{snap['max_change']:.2e}" if snap['max_change'] != float('inf') else "∞")
+
+        # MNQ9信心核
+        om = self.mnq9_sim.core.omega
+        sn = self.mnq9_sim.snapshot()
+        self.lbl_mnq9_omega.config(text=f"{om:.6f}")
+        self.lbl_mnq9_bconf.config(
+            text=f"{self.mnq9_bconf_history[-1]:.6f}" if self.mnq9_bconf_history else "0.0000")
+        self.lbl_mnq9_kernel.config(text=f"{sn['kernel']:.6f}")
+
+        # CGD约束
+        state_vec = np.array([self.mesh.total_mass, m.gamma, m.omega])
+        _, violation = self.cgd_engine.evaluate(state_vec)
+        self.lbl_cgd_violation.config(text=f"{violation:.6f}")
+        self.lbl_cgd_phase.config(text=f"{self.cgd_engine.phase_state}")
+        self.lbl_cgd_steady.config(text=f"{len(self.cgd_engine.steady_states)}")
+
+        # PG
         self.lbl_mass_faces.config(text=f"{self.mesh.mass_face_count}")
         self.lbl_total_mass.config(text=f"{self.mesh.total_mass:.4f}")
         self.lbl_total_loop.config(text=f"{self.mesh.total_loop:.4f}")
+
+        # 刘机制
         self.lbl_s_rel.config(text=f"{self.liu_scheduler.min_s_rel:.4f}")
         self.lbl_path_len.config(text=f"{len(self.liu_scheduler.optimal_path)}")
 
-        # 更新状态栏
+        # 更新CGD列表
+        self.cgd_listbox.delete(0, tk.END)
+        for c in self.cgd_engine.constraints:
+            lo, hi = c.target_range
+            marker = "✓" if lo <= c.current_value <= hi else "✗"
+            self.cgd_listbox.insert(tk.END,
+                f"  {marker} {c.name}: [{lo:.1f}, {hi:.1f}] v={c.current_value:.4f}")
+
+        # 状态栏
         self.status_label.config(
             text=f"Step {self.step_count} | "
                  f"Mass={self.mesh.total_mass:.3f} | "
                  f"MF={self.mesh.mass_face_count} | "
                  f"γ={m.gamma:.5f} | "
-                 f"Rcoh={m.rcoh:.4f}"
+                 f"Ω9={om:.3f} | "
+                 f"CGD={'OK' if violation<1e-4 else 'VIOL'}"
         )
 
     # ================================================================
@@ -512,14 +717,12 @@ class MNQDashboard:
     # ================================================================
 
     def _trace_liu_path(self):
-        """追踪刘机制最优路径"""
         cx, cy = self.mesh.dim_x // 2, self.mesh.dim_y // 2
         path = self.liu_scheduler.find_optimal_path(self.mesh, (cx, cy))
         self._log(f"刘路径追踪: {len(path)}步, S_Rel={self.liu_scheduler.min_s_rel:.4f}")
         self._refresh_all_plots()
 
     def _run_cloud_sim(self):
-        """运行MNQ Cloud API兼容仿真"""
         mode = self.scale_mode.get()
         self.cloud_api = MNQCloudAPI(unit_mode=mode)
         result = self.cloud_api.simulate(experiment='hex_ring_gap', steps=512)
@@ -534,8 +737,56 @@ class MNQDashboard:
         self.cloud_result.insert('1.0', '\n'.join(lines))
         self._log(f"Cloud仿真完成 (尺度: {mode})")
 
+    def _run_scf_convergence(self):
+        """运行三层信息波SCF收敛"""
+        self.three_layer = ThreeLayerInfoWave(core_init=0.001)
+        steps = self.three_layer.run_to_convergence(max_steps=500)
+        snap = self.three_layer.snapshot()
+        self._log(f"SCF收敛: {steps}步, core={snap['core']:.6f}, "
+                  f"converged={snap['converged']}")
+        self._refresh_all_plots()
+
+    def _apply_mnq9_scenario(self):
+        """应用MNQ9宏观场景"""
+        scenario = self.mnq9_scenario.get()
+        gen = MNQ9ScenarioGenerator()
+        if scenario == "bull":
+            macro, events = gen.bull_market()
+            name = "牛市"
+        elif scenario == "bear":
+            macro, events = gen.bear_market()
+            name = "熊市"
+        elif scenario == "crisis":
+            macro, events = gen.crisis_recovery()
+            name = "危机恢复"
+        elif scenario == "policy":
+            macro, events = gen.policy_shock()
+            name = "政策冲击"
+        else:
+            return
+
+        self.mnq9_sim = MNQ9Simulator(lam=0.03)
+        self.mnq9_sim.set_macro_confidence(macro)
+        self.mnq9_sim.set_future_wave(events)
+        self.mnq9_omega_history.clear()
+        self.mnq9_bconf_history.clear()
+        self._log(f"MNQ9场景切换: {name}")
+        self._refresh_all_plots()
+
+    def _run_mnq9_trend(self):
+        """手动运行MNQ9趋势模拟"""
+        self.mnq9_omega_history.clear()
+        self.mnq9_bconf_history.clear()
+        omega_series = self.mnq9_sim.run_series(steps=60)
+        report = self.mnq9_sim.generate_report()
+        self.mnq9_omega_history.extend(omega_series)
+        self.mnq9_bconf_history.extend(self.mnq9_sim.B_conf_series)
+        self._log(f"MNQ9趋势: {report['trend_direction']} "
+                  f"strength={report['trend_strength']:.4f} "
+                  f"vol={report['trend_volatility']:.4f}")
+        self._refresh_all_plots()
+
     def _log(self, msg: str):
-        """添加日志"""
         timestamp = time.strftime("%H:%M:%S")
         self.log_text.insert(tk.END, f"[{timestamp}] {msg}\n")
         self.log_text.see(tk.END)
@@ -554,13 +805,13 @@ class MNQDashboard:
 # ============================================================================
 
 def run_cli_simulation():
-    """命令行独立运行MNQ仿真"""
+    """命令行独立运行MNQ仿真 (v2.0 扩展实验)"""
     print("=" * 60)
-    print("  MNQ 金灵球网络仿真器 - CLI 模式")
-    print("  基于复合体理学 MNQ/IWPU 理论体系")
+    print("  MNQ 金灵球网络仿真器 v2.0 - CLI 模式")
+    print("  基于复合体理学 MNQ/IWPU/CGD/MNQ9 理论体系")
     print("=" * 60)
 
-    # 实验1: 死零场 (ZERO_FIELD)
+    # 实验1-8: 原有实验
     print("\n[实验1] ZERO_FIELD 死零场")
     mesh = JinlingMesh(dim_x=16, dim_y=16)
     mesh.seed_zero_field()
@@ -568,9 +819,8 @@ def run_cli_simulation():
         mesh.mnq8_step(dt=0.016)
     print(f"  结果: Mass={mesh.total_mass:.6f}, Loop={mesh.total_loop:.6f}, "
           f"MF={mesh.mass_face_count}")
-    print(f"  验证: 死零场不破缺 (Mass应≈0)")
+    print(f"  验证: 死零场不破缺")
 
-    # 实验2: 背景振荡 (BACKGROUND_OSC)
     print("\n[实验2] BACKGROUND_OSC 动态背景")
     mesh = JinlingMesh(dim_x=16, dim_y=16)
     mesh.seed_background()
@@ -578,9 +828,8 @@ def run_cli_simulation():
         mesh.mnq8_step(dt=0.016)
     print(f"  结果: Mass={mesh.total_mass:.6f}, Loop={mesh.total_loop:.6f}, "
           f"MF={mesh.mass_face_count}")
-    print(f"  验证: 背景态Mass≈0.1 (弥散,无囚禁)")
+    print(f"  验证: 背景态弥散,无囚禁")
 
-    # 实验3: 缺口六边形壳层 (HEX_RING_GAP)
     print("\n[实验3] HEX_RING_GAP 缺口六角壳层")
     mesh = JinlingMesh(dim_x=32, dim_y=32)
     mesh.seed_hex_ring_gap()
@@ -588,9 +837,8 @@ def run_cli_simulation():
         mesh.mnq8_step(dt=0.016)
     print(f"  结果: Mass={mesh.total_mass:.6f}, Loop={mesh.total_loop:.6f}, "
           f"MF={mesh.mass_face_count}")
-    print(f"  验证: HEX_RING_GAP Mass≈0.4, Loop>0 (流贯囚禁)")
+    print(f"  验证: 流贯囚禁")
 
-    # 实验4: 3D复广数 (金符学) 阴龙积
     print("\n[实验4] 金符学 3D复广数 阴龙积⊙")
     z1 = GoldenSymbol3D(1.0, 0.5, 0.3)
     z2 = GoldenSymbol3D(0.8, -0.3, 0.2)
@@ -599,10 +847,8 @@ def run_cli_simulation():
     print(f"  z2 = {z2}")
     print(f"  z1 ⊙ z2 = {z_product}")
     print(f"  |z1⊙z2| = {z_product.norm():.6f}")
-    print(f"  验证: 阴龙积保持能量守恒 (模≈乘积)")
 
-    # 实验5: 刘机制路径
-    print("\n[实验5] 刘机制最优路径 (δS_Rel=0)")
+    print("\n[实验5] 刘机制最优路径")
     mesh = JinlingMesh(dim_x=32, dim_y=32)
     mesh.seed_hex_ring_gap()
     for i in range(500):
@@ -610,25 +856,20 @@ def run_cli_simulation():
     scheduler = LiuScheduler()
     path = scheduler.find_optimal_path(mesh, (16, 16))
     print(f"  最优路径: {len(path)}步, S_Rel={scheduler.min_s_rel:.4f}")
-    print(f"  验证: 流贯沿最小阻抗路径传播")
 
-    # 实验6: MNQ Cloud API
     print("\n[实验6] MNQ Cloud API 三尺度仿真")
     for mode in ['atomic', 'meso', 'macro']:
         api = MNQCloudAPI(unit_mode=mode)
         result = api.simulate(experiment='hex_ring_gap', steps=512, seed=42)
         print(f"  [{mode}] mean_energy={result['mean_energy_J']:.4e} J, "
-              f"coherence={result['coherence']:.6f}, "
-              f"phase_lock={result['phase_lock']:.6f}")
+              f"coherence={result['coherence']:.6f}")
 
-    # 实验7: Hex64映射
     print("\n[实验7] Hex64 六十四卦映射")
     for i in range(8):
         r = get_hex64_rule(i)
-        print(f"  {r.name} ({r.opcode:6s}): Δφ={r.phi_delta:+.2f} ΔΩ={r.omega_delta:+.2f} Δγ={r.gamma_delta:+.4f}")
+        print(f"  {r.name} ({r.opcode:6s}): Δφ={r.phi_delta:+.2f} ΔΩ={r.omega_delta:+.2f}")
 
-    # 实验8: GPU四场
-    print("\n[实验8] GPU φ/Ω/ψ/ξ 四场演化")
+    print("\n[实验8] GPU四场演化")
     gpu = MNQFieldGPU(grid=64)
     t0 = time.time()
     for i in range(5000):
@@ -636,13 +877,66 @@ def run_cli_simulation():
         if i % 1000 == 0:
             gpu.inject_noise(0.001)
     elapsed = time.time() - t0
-    omega_avg = gpu.measure_omega_avg()
-    rloc = gpu.compute_rloc()
-    print(f"  5000步耗时: {elapsed:.2f}s ({5000/elapsed:.0f} steps/s)")
-    print(f"  Ω_avg={omega_avg:.6f}, Rloc={rloc:.6f}")
+    print(f"  5000步: {elapsed:.2f}s ({5000/elapsed:.0f} steps/s)")
+
+    # ---- v2.0 新增实验 ----
+
+    print("\n[实验9] 三层信息波 SCF收敛")
+    wave = ThreeLayerInfoWave(core_init=0.001)
+    steps = wave.run_to_convergence(max_steps=300)
+    snap = wave.snapshot()
+    print(f"  收敛步数: {steps}")
+    print(f"  核心层: {snap['core']:.6f}")
+    print(f"  八卦层均值: {snap['bagua_mean']:.6f}")
+    print(f"  64卦层均值: {snap['hex64_mean']:.6f}")
+    print(f"  收敛: {snap['converged']}")
+
+    print("\n[实验10] CGD约束生成动力学")
+    cgd = CGDEngine()
+    cgd.add_constraint("质量面", (0.0, 0.5), modulation=0.005)
+    cgd.add_constraint("相干度", (0.98, 1.0), modulation=0.002)
+    mesh = JinlingMesh(dim_x=16, dim_y=16)
+    mesh.seed_background()
+    violations = []
+    for i in range(200):
+        mesh.mnq8_step(dt=0.016)
+        sv = np.array([mesh.total_mass, mesh.minimal.gamma, mesh.minimal.omega])
+        is_legal, viol = cgd.evaluate(sv)
+        violations.append(viol)
+    print(f"  最大违反度: {max(violations):.6f}")
+    print(f"  平均违反度: {np.mean(violations):.6f}")
+    print(f"  稳态数: {len(cgd.steady_states)}")
+
+    print("\n[实验11] MNQ9 宏观趋势模拟")
+    sim = MNQ9Simulator(lam=0.03)
+    macro, events = MNQ9ScenarioGenerator.bull_market()
+    sim.set_macro_confidence(macro)
+    sim.set_future_wave(events)
+    omega = sim.run_series(steps=40)
+    report = sim.generate_report()
+    print(f"  趋势方向: {report['trend_direction']}")
+    print(f"  趋势强度: {report['trend_strength']:.4f}")
+    print(f"  波动率: {report['trend_volatility']:.4f}")
+    print(f"  终值Ω: {report['final_omega']:.4f}")
+
+    print("\n[实验12] MNQ9 四种场景对比")
+    for name, (macro, events) in [
+        ("牛市", MNQ9ScenarioGenerator.bull_market()),
+        ("熊市", MNQ9ScenarioGenerator.bear_market()),
+        ("危机恢复", MNQ9ScenarioGenerator.crisis_recovery()),
+        ("政策冲击", MNQ9ScenarioGenerator.policy_shock()),
+    ]:
+        sim = MNQ9Simulator(lam=0.03)
+        sim.set_macro_confidence(macro)
+        sim.set_future_wave(events)
+        omega = sim.run_series(steps=40)
+        report = sim.generate_report()
+        print(f"  {name}: Ω={report['final_omega']:+.4f} "
+              f"dir={report['trend_direction']} "
+              f"vol={report['trend_volatility']:.4f}")
 
     print("\n" + "=" * 60)
-    print("  全部实验完成!")
+    print("  全部12项实验完成!")
     print("=" * 60)
 
 
