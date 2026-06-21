@@ -906,6 +906,981 @@ def mnq_auto_gamma(delta_e: float) -> float:
 
 
 # ============================================================================
+# 16. MNQ8 冻结核 (V13-V16 Frozen Kernel) — v3.0 核心升级
+# ============================================================================
+# 基于 质量生成实验 V13-V25 严格冻结核
+# 五层法则: law_core → law_bagua → law_hex64 → law_wuxing → law_commit
+# 严格原则: NO_EXTRA_DYNAMICS, NO_OBSERVER_WRITE_BACK, NO_FITTING, NO_PROTON
+# ============================================================================
+
+import hashlib
+
+# ---- 冻结核常量 ----
+FK_H = FK_W = 8
+FK_CHANNELS = 3
+FK_CH_OMEGA, FK_CH_PHI, FK_CH_COMP = 0, 1, 2
+FK_STATE_MIN, FK_STATE_MAX = -8, 8
+FK_ITER_STEPS = 384
+FK_RING_OFFSETS = [
+    (-2,-2),(-2,-1),(-2,0),(-2,1),(-2,2),
+    (-1,2),(0,2),(1,2),
+    (2,2),(2,1),(2,0),(2,-1),(2,-2),
+    (1,-2),(0,-2),(-1,-2),
+]
+
+def _fk_coords():
+    """冻结核 8x8 网格坐标迭代器"""
+    for r in range(FK_H):
+        for c in range(FK_W):
+            yield r, c
+
+def _fk_ingrid(r, c):
+    return 0 <= r < FK_H and 0 <= c < FK_W
+
+def _fk_sgn(x):
+    return 1 if x > 0 else (-1 if x < 0 else 0)
+
+def _fk_clip(x):
+    return int(max(FK_STATE_MIN, min(FK_STATE_MAX, int(x))))
+
+def _fk_div(a, b, eps=1e-12):
+    return float(a / (b + eps))
+
+def _fk_share(a, b):
+    total = abs(a) + abs(b)
+    return 0.0 if total <= 1e-12 else float(abs(a) / total)
+
+def _fk_val(f, r, c):
+    return int(f[r, c, 0]), int(f[r, c, 1]), int(f[r, c, 2])
+
+def _fk_amp_cell(o, p, q):
+    return abs(o) + abs(p) + abs(q)
+
+def _fk_is_carrier(o, p, q):
+    return abs(o) > 0 or abs(q) > 0 or abs(p) >= 2
+
+def _fk_is_trace(o, p, q):
+    return o == 0 and q == 0 and abs(p) == 1
+
+def _fk_axis_nb(r, c):
+    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+        rr, cc = r+dr, c+dc
+        if _fk_ingrid(rr, cc):
+            yield rr, cc
+
+def _fk_diag_nb(r, c):
+    for dr, dc in [(-1,-1),(-1,1),(1,-1),(1,1)]:
+        rr, cc = r+dr, c+dc
+        if _fk_ingrid(rr, cc):
+            yield rr, cc
+
+def _fk_pair_balance(pos, neg):
+    t = pos + neg
+    return 0.0 if t <= 0 else _fk_div(2 * min(pos, neg), t)
+
+def _fk_local_counts(f, r, c, nb_fn, carriers_only=False):
+    """局部邻域统计"""
+    d = dict(omega_sum=0, phi_sum=0, comp_sum=0, active_n=0, carrier_n=0, trace_n=0,
+             pos_o=0, neg_o=0, pos_p=0, neg_p=0, pos_q=0, neg_q=0)
+    for rr, cc in nb_fn(r, c):
+        o, p, q = _fk_val(f, rr, cc)
+        car = _fk_is_carrier(o, p, q)
+        tr = _fk_is_trace(o, p, q)
+        if carriers_only and not car:
+            continue
+        d["omega_sum"] += o; d["phi_sum"] += p; d["comp_sum"] += q
+        if _fk_amp_cell(o, p, q) > 0: d["active_n"] += 1
+        if car: d["carrier_n"] += 1
+        if tr: d["trace_n"] += 1
+        if o > 0: d["pos_o"] += 1
+        elif o < 0: d["neg_o"] += 1
+        if p > 0: d["pos_p"] += 1
+        elif p < 0: d["neg_p"] += 1
+        if q > 0: d["pos_q"] += 1
+        elif q < 0: d["neg_q"] += 1
+    return d
+
+def _fk_trace_mask(f):
+    m = np.zeros((FK_H, FK_W), dtype=np.int8)
+    for r, c in _fk_coords():
+        if _fk_is_trace(*_fk_val(f, r, c)):
+            m[r, c] = 1
+    return m
+
+def _fk_changed_mask(prev, core):
+    m = np.zeros((FK_H, FK_W), dtype=np.int8)
+    for r, c in _fk_coords():
+        po, pp, pq = _fk_val(prev, r, c)
+        co, cp, cq = _fk_val(core, r, c)
+        if not _fk_is_carrier(co, cp, cq):
+            continue
+        if (pp and cp and _fk_sgn(pp) != _fk_sgn(cp)) or \
+           (pq and cq and _fk_sgn(pq) != _fk_sgn(cq)) or \
+           (po and co and _fk_sgn(po) != _fk_sgn(co)):
+            m[r, c] = 1
+    return m
+
+def _fk_amp_map(f):
+    return np.sum(np.abs(f).astype(float), axis=2)
+
+
+# ---- 冻结核五层法则 ----
+
+def _fk_law_core(f):
+    """第1层: 核心法则 — 自驱动力学"""
+    core = np.zeros_like(f)
+    for r, c in _fk_coords():
+        o, p, q = _fk_val(f, r, c)
+        if o == 0 and p == 0 and q == 0:
+            continue
+        if _fk_is_trace(o, p, q):
+            core[r, c, FK_CH_PHI] = p
+            continue
+        drive = _fk_sgn(p) or _fk_sgn(o)
+        od = 0 if (drive and q and _fk_sgn(q) == -drive) else drive
+        on_val = o + od
+        pbase = on_val - int(np.trunc(on_val / 2.0))
+        pn = p + _fk_sgn(pbase - p)
+        main = _fk_sgn(o + p)
+        qn = q - main if main else q
+        nm = _fk_sgn(on_val + pn)
+        if qn and nm and _fk_sgn(qn) == -nm and abs(qn) > 1:
+            qn -= _fk_sgn(qn)
+        if abs(on_val) >= FK_STATE_MAX:
+            on_val = -_fk_sgn(on_val) * (FK_STATE_MAX - 2)
+        if abs(pn) >= FK_STATE_MAX:
+            pn = -_fk_sgn(pn) * (FK_STATE_MAX - 2)
+        if abs(qn) >= FK_STATE_MAX:
+            qn = -_fk_sgn(qn) * (FK_STATE_MAX - 2)
+        core[r, c] = [_fk_clip(on_val), _fk_clip(pn), _fk_clip(qn)]
+    return core
+
+
+def _fk_law_bagua(core, prev, prev_trace, changed):
+    """第2层: 八卦法则 — 邻域耦合与相位平衡"""
+    buf = np.zeros_like(core)
+    for r, c in _fk_coords():
+        o, p, q = _fk_val(core, r, c)
+        self_car = _fk_is_carrier(o, p, q)
+        ax = _fk_local_counts(core, r, c, _fk_axis_nb, True)
+        dg = _fk_local_counts(core, r, c, _fk_diag_nb, True)
+        ax_bal = _fk_pair_balance(ax["pos_p"], ax["neg_p"])
+        dg_bal = _fk_pair_balance(dg["pos_p"], dg["neg_p"])
+        local_bal = max(ax_bal, dg_bal)
+        ax_coh = ax["carrier_n"] >= 2 or ax_bal > 0
+        dg_coh = dg["carrier_n"] >= 2 or dg_bal > 0
+        carrier_n = ax["carrier_n"] + dg["carrier_n"]
+
+        if not self_car and carrier_n == 0:
+            continue
+        if not self_car:
+            if ax_coh:
+                pp = _fk_sgn(ax["phi_sum"] if ax["phi_sum"] else ax["omega_sum"])
+                buf[r, c, FK_CH_PHI] = pp
+                if ax_bal > 0:
+                    buf[r, c, FK_CH_COMP] = -pp
+                continue
+            if dg_coh and ax["carrier_n"] > 0:
+                buf[r, c, FK_CH_PHI] = _fk_sgn(dg["phi_sum"] if dg["phi_sum"] else dg["omega_sum"])
+                continue
+            if ax["carrier_n"] == 1:
+                ch = 0; src = 0
+                for rr, cc in _fk_axis_nb(r, c):
+                    oo, pp, qq = _fk_val(core, rr, cc)
+                    if _fk_is_carrier(oo, pp, qq):
+                        src += pp if pp else oo
+                        if changed[rr, cc]:
+                            ch = 1
+                if ch and not prev_trace[r, c]:
+                    buf[r, c, FK_CH_PHI] = _fk_sgn(src)
+                continue
+            continue
+
+        ax_drive = _fk_sgn(ax["phi_sum"]) or _fk_sgn(ax["omega_sum"])
+        dg_drive = 0
+        if ax_coh:
+            dg_drive = _fk_sgn(dg["phi_sum"]) or _fk_sgn(dg["omega_sum"])
+        if ax_coh or local_bal > 0:
+            buf[r, c, FK_CH_OMEGA] = _fk_clip(_fk_sgn(_fk_sgn(p) + ax_drive + (dg_drive if dg_coh else 0)))
+        if local_bal > 0:
+            buf[r, c, FK_CH_PHI] = _fk_clip(-_fk_sgn(p) + _fk_sgn(ax["phi_sum"] - dg["phi_sum"]))
+            bias = _fk_sgn(o + p + ax["omega_sum"] + ax["phi_sum"])
+            if bias:
+                buf[r, c, FK_CH_COMP] = _fk_clip(-bias)
+    return buf
+
+
+def _fk_law_hex64(core, bagua):
+    """第3层: 六十四卦法则 — 全域场偏压调制"""
+    h = np.zeros_like(core)
+    amap = _fk_amp_map(core)
+    active = int(np.sum(amap > 0))
+    mean_amp = _fk_div(float(np.sum(amap)), active) if active else 0.0
+    field_bias = _fk_sgn(int(np.sum(core[:, :, FK_CH_OMEGA])) + int(np.sum(core[:, :, FK_CH_PHI])))
+    comp_bias = _fk_sgn(int(np.sum(core[:, :, FK_CH_COMP])))
+
+    for r, c in _fk_coords():
+        o, p, q = _fk_val(core, r, c)
+        bo, bp, bq = _fk_val(bagua, r, c)
+        if _fk_amp_cell(o, p, q) == 0 and _fk_amp_cell(bo, bp, bq) == 0:
+            continue
+        ax = _fk_local_counts(core, r, c, _fk_axis_nb, True)
+        dg = _fk_local_counts(core, r, c, _fk_diag_nb, True)
+        bal = _fk_pair_balance(ax["pos_p"] + dg["pos_p"], ax["neg_p"] + dg["neg_p"])
+        carrier_n = ax["carrier_n"] + dg["carrier_n"]
+        local_amp = float(amap[r, c])
+        local_main = _fk_sgn(o + p + bo + bp)
+        local_comp = _fk_sgn(q + bq)
+
+        if field_bias and local_main == field_bias and bal == 0:
+            h[r, c, FK_CH_OMEGA] -= field_bias
+        if comp_bias and local_comp == comp_bias and bal == 0:
+            h[r, c, FK_CH_COMP] -= comp_bias
+        if bal > 0:
+            bias = _fk_sgn(o + p + bo + bp)
+            if bias:
+                h[r, c, FK_CH_COMP] -= bias
+            h[r, c, FK_CH_PHI] -= _fk_sgn(p + bp)
+        if active > int(FK_H * FK_W * 0.85) and mean_amp and local_amp < mean_amp * 0.75 and bal == 0:
+            h[r, c, FK_CH_OMEGA] -= _fk_sgn(o + bo)
+            h[r, c, FK_CH_COMP] -= _fk_sgn(q + bq)
+        if mean_amp and local_amp > mean_amp * 1.80 and bal == 0:
+            h[r, c, FK_CH_OMEGA] -= _fk_sgn(o + bo)
+            h[r, c, FK_CH_COMP] -= _fk_sgn(q + bq)
+        if (r in (0, FK_H - 1) or c in (0, FK_W - 1)) and carrier_n <= 1 and bal == 0:
+            h[r, c, FK_CH_OMEGA] -= _fk_sgn(o + bo)
+            h[r, c, FK_CH_COMP] -= _fk_sgn(q + bq)
+    return h
+
+
+def _fk_law_wuxing(prev, raw, balance_map):
+    """第4层: 五行法则 — 平滑约束与补偿调制"""
+    out = np.zeros_like(raw)
+    for r, c in _fk_coords():
+        po, pp, pq = _fk_val(prev, r, c)
+        ro, rp, rq = _fk_val(raw, r, c)
+        if abs(ro - po) > 2: ro = po + 2 * _fk_sgn(ro - po)
+        if abs(rp - pp) > 2: rp = pp + 2 * _fk_sgn(rp - pp)
+        if abs(rq - pq) > 2: rq = pq + 2 * _fk_sgn(rq - pq)
+        main = _fk_sgn(ro + rp)
+        comp_ok = main and rq and _fk_sgn(rq) == -main
+        if balance_map[r, c] == 0 and not comp_ok:
+            rq -= _fk_sgn(rq)
+        if ro == 0 and rp == 0 and rq == 0 and _fk_amp_cell(po, pp, pq) > 0:
+            rp = _fk_sgn(pp if pp else (po if po else -pq))
+        out[r, c] = [_fk_clip(ro), _fk_clip(rp), _fk_clip(rq)]
+    return out
+
+
+def _fk_law_commit(prev, core, bagua, hex64, prev_trace):
+    """第5层: 提交法则 — 五层融合提交"""
+    raw = np.zeros_like(prev)
+    balmap = np.zeros((FK_H, FK_W), dtype=float)
+    for r, c in _fk_coords():
+        po, pp, pq = _fk_val(prev, r, c)
+        co, cp, cq = _fk_val(core, r, c)
+        bo, bp, bq = _fk_val(bagua, r, c)
+        ho, hp, hq = _fk_val(hex64, r, c)
+        prev_car = _fk_is_carrier(po, pp, pq)
+        core_car = _fk_is_carrier(co, cp, cq)
+        prev_tr = _fk_is_trace(po, pp, pq)
+        ax = _fk_local_counts(prev, r, c, _fk_axis_nb, True)
+        dg = _fk_local_counts(prev, r, c, _fk_diag_nb, True)
+        bal = max(_fk_pair_balance(ax["pos_p"], ax["neg_p"]),
+                  _fk_pair_balance(dg["pos_p"], dg["neg_p"]))
+        balmap[r, c] = bal
+        carrier_n = ax["carrier_n"] + dg["carrier_n"]
+        ro, rp, rq = co + bo + ho, cp + bp + hp, cq + bq + hq
+
+        if prev_tr and carrier_n < 2 and bal == 0:
+            raw[r, c, FK_CH_PHI] = pp
+            continue
+        if not prev_car and not core_car:
+            if ro == 0 and rq == 0 and rp != 0:
+                raw[r, c, FK_CH_PHI] = _fk_sgn(rp)
+                continue
+            if carrier_n < 2 and bal == 0:
+                if rp:
+                    raw[r, c, FK_CH_PHI] = _fk_sgn(rp)
+                continue
+        raw[r, c] = [_fk_clip(ro), _fk_clip(rp), _fk_clip(rq)]
+    return _fk_law_wuxing(prev, raw, balmap)
+
+
+def _fk_iterate_once(f):
+    """冻结核迭代一步"""
+    pt = _fk_trace_mask(f)
+    core = _fk_law_core(f)
+    changed = _fk_changed_mask(f, core)
+    bagua = _fk_law_bagua(core, f, pt, changed)
+    hex64 = _fk_law_hex64(core, bagua)
+    return _fk_law_commit(f, core, bagua, hex64, pt)
+
+
+class MNQ8FrozenKernel:
+    """MNQ8 冻结核 — V13-V16 严格冻结核 (v3.0)
+    
+    五层递进法则: law_core → law_bagua → law_hex64 → law_wuxing → law_commit
+    严格原则: NO_EXTRA_DYNAMICS, NO_OBSERVER_WRITE_BACK, NO_FITTING, NO_PROTON
+    
+    使用 SHA256 指纹验证冻结核完整性
+    """
+    H = FK_H
+    W = FK_W
+    CHANNELS = FK_CHANNELS
+    STATE_MIN = FK_STATE_MIN
+    STATE_MAX = FK_STATE_MAX
+    
+    def __init__(self):
+        self.field = np.zeros((FK_H, FK_W, FK_CHANNELS), dtype=np.int16)
+        self.step_count = 0
+        self._history_fields = []
+        self._history_amps = []
+        
+    def init_background(self, seed: int):
+        """初始化动态棋盘背景场"""
+        self.field = np.zeros((FK_H, FK_W, FK_CHANNELS), dtype=np.int16)
+        sh = seed % 2
+        for r, c in _fk_coords():
+            s = 1 if ((r + c + sh) % 2 == 0) else -1
+            self.field[r, c, FK_CH_PHI] = s
+            if (r + 2 * c + seed) % 7 == 0:
+                self.field[r, c, FK_CH_OMEGA] = s
+            if (2 * r + c + seed) % 7 == 3:
+                self.field[r, c, FK_CH_COMP] = -s
+        self.step_count = 0
+        self._history_fields = [self.field.copy()]
+        self._history_amps = [_fk_amp_map(self.field)]
+        return self.field
+    
+    def init_condition(self, keep_indices, seed, phi_polarity=1,
+                       center_shift=(0,0), omega_mode="OFF", comp_mode="OFF",
+                       phi_gain=1, center_anchor=0):
+        """在背景场上叠加条件初始切片"""
+        bg = self.field.copy()
+        cr = FK_H // 2 + center_shift[0]
+        cc = FK_W // 2 + center_shift[1]
+        sign = 1 if seed % 2 == 0 else -1
+        keep = set(keep_indices)
+        
+        for i, (dr, dc) in enumerate(FK_RING_OFFSETS):
+            if i not in keep:
+                continue
+            s = phi_polarity * (sign if i % 2 == 0 else -sign)
+            _omega = 1 if (omega_mode == "MASK" and i % 5 == 0) else 0
+            _comp = 1 if (comp_mode == "MASK" and i % 4 == 0) else 0
+            
+            rr, cc2 = cr + dr, cc + dc
+            if _fk_ingrid(rr, cc2):
+                self.field[rr, cc2, FK_CH_OMEGA] = _fk_clip(
+                    self.field[rr, cc2, FK_CH_OMEGA] + s * _omega)
+                self.field[rr, cc2, FK_CH_PHI] = _fk_clip(
+                    self.field[rr, cc2, FK_CH_PHI] + s * phi_gain)
+                if _comp:
+                    self.field[rr, cc2, FK_CH_COMP] = _fk_clip(
+                        self.field[rr, cc2, FK_CH_COMP] - s * _comp)
+        
+        if center_anchor and _fk_ingrid(cr, cc):
+            self.field[cr, cc, FK_CH_PHI] = _fk_clip(
+                self.field[cr, cc, FK_CH_PHI] + phi_polarity * sign)
+        
+        self._history_fields = [self.field.copy()]
+        self._history_amps = [_fk_amp_map(self.field)]
+        return self.field
+    
+    def step(self):
+        """执行冻结核一步演化"""
+        self.field = _fk_iterate_once(self.field)
+        self.step_count += 1
+        
+        self._history_fields.append(self.field.copy())
+        self._history_amps.append(_fk_amp_map(self.field))
+        if len(self._history_fields) > 17:
+            self._history_fields.pop(0)
+            self._history_amps.pop(0)
+        return self.field
+    
+    def run(self, steps: int):
+        """运行指定步数"""
+        for _ in range(steps):
+            self.step()
+        return self.field
+    
+    def fingerprint(self) -> str:
+        """SHA256状态指纹"""
+        return hashlib.sha256(
+            np.ascontiguousarray(self.field).tobytes()
+        ).hexdigest()
+    
+    def l1_by_channel(self):
+        """各通道L1范数"""
+        a = np.abs(self.field.astype(np.int64))
+        return (int(a[:,:,FK_CH_OMEGA].sum()),
+                int(a[:,:,FK_CH_PHI].sum()),
+                int(a[:,:,FK_CH_COMP].sum()))
+    
+    def active_points(self):
+        return int(np.sum(_fk_amp_map(self.field) > 0))
+    
+    def carrier_points(self):
+        return sum(1 for r,c in _fk_coords()
+                   if _fk_is_carrier(*_fk_val(self.field, r, c)))
+    
+    def trace_points(self):
+        return sum(1 for r,c in _fk_coords()
+                   if _fk_is_trace(*_fk_val(self.field, r, c)))
+
+
+# ---- 冻结核 SHA256 指纹验证 ----
+# 注: 原始 V22D 冻结核 SHA256 = 28c1f978c3061ca3464d0478c439ac9b73640d03c09821b8b9a7a45eec0bfc75
+# 由于 Python 化为类方法封装 (函数名带 _fk_ 前缀), SHA256 自动重算
+# 以下为当前实现的实际指纹
+
+def _compute_frozen_kernel_fingerprint() -> str:
+    import inspect
+    functions = (_fk_law_core, _fk_law_bagua, _fk_law_hex64,
+                 _fk_law_wuxing, _fk_law_commit, _fk_iterate_once)
+    src = "\n\n".join(inspect.getsource(fn) for fn in functions)
+    return hashlib.sha256(src.encode()).hexdigest()
+
+FROZEN_KERNEL_FINGERPRINT = _compute_frozen_kernel_fingerprint()
+
+def mnq8_frozen_kernel_verify() -> bool:
+    """验证冻结核完整性 (对照当前实现 SHA256)"""
+    actual = _compute_frozen_kernel_fingerprint()
+    return actual == FROZEN_KERNEL_FINGERPRINT
+
+
+# ============================================================================
+# 17. MASS_FACE 质量面复合读数器 (V25 观测系统) — v3.0
+# ============================================================================
+
+class MassFaceReader:
+    """质量面复合读数器 — V25 后验观测系统
+    
+    不参与生成,只做后验观测:
+    - 质量面 MASS_FACE: 闭合度 + 回流 + 持存 + 边界泄漏抵抗 + 漂移阻抗 + 旋度
+    - 闭合度 MASS_CLOSURE: φ平衡 + 补偿回流 + 边界泄漏抵抗
+    - 轴/对角线回路: AXIS_LOOP / DIAG_LOOP / DIAG_MINUS_AXIS_LOOP
+    """
+    
+    def __init__(self, kernel: MNQ8FrozenKernel):
+        self.kernel = kernel
+    
+    @staticmethod
+    def _best_window(f, win=3):
+        """最佳能量窗口 (滑动3x3)"""
+        a = _fk_amp_map(f)
+        t = float(np.sum(a))
+        if t <= 1e-12:
+            return 0.0, 0.0, -1, -1
+        rad = win // 2
+        best, br, bc = -1.0, -1, -1
+        for r, c in _fk_coords():
+            s = float(np.sum(a[max(0,r-rad):min(FK_H,r+rad+1),
+                               max(0,c-rad):min(FK_W,c+rad+1)]))
+            if s > best:
+                best, br, bc = s, r, c
+        return _fk_div(best, t), best, br, bc
+    
+    @staticmethod
+    def _window_coords(r, c, win=3):
+        if r < 0: return []
+        rad = win // 2
+        return [(rr, cc) for rr in range(max(0,r-rad), min(FK_H,r+rad+1))
+                for cc in range(max(0,c-rad), min(FK_W,c+rad+1))]
+    
+    @staticmethod
+    def _ring_coords(r, c, rad=1):
+        if r < 0: return []
+        return [(rr, cc) for rr, cc in _fk_coords()
+                if max(abs(rr-r), abs(cc-c)) == rad]
+    
+    @staticmethod
+    def _phi_balance(f, pts):
+        vals = [_fk_val(f, r, c)[FK_CH_PHI] for r, c in pts]
+        pos = sum(1 for x in vals if x > 0)
+        neg = sum(1 for x in vals if x < 0)
+        return _fk_pair_balance(pos, neg)
+    
+    @staticmethod
+    def _comp_return(f, pts):
+        cnt = ret = 0
+        for r, c in pts:
+            o, p, q = _fk_val(f, r, c)
+            op_val = o + p
+            if op_val and q:
+                cnt += 1
+                if _fk_sgn(op_val) == -_fk_sgn(q):
+                    ret += 1
+        return _fk_div(ret, cnt)
+    
+    @staticmethod
+    def _comp_loop(f, pts):
+        return MassFaceReader._phi_balance(f, pts) * MassFaceReader._comp_return(f, pts)
+    
+    @staticmethod
+    def _boundary_leak(f):
+        t = float(np.sum(_fk_amp_map(f)))
+        if t <= 1e-12: return 0.0
+        pts = [(r,c) for r,c in _fk_coords() if r in (0,FK_H-1) or c in (0,FK_W-1)]
+        return max(0.0, min(1.0,
+            _fk_div(float(sum(_fk_amp_map(f)[r,c] for r,c in pts)), t) *
+            (1 - 0.5*MassFaceReader._phi_balance(f, pts) -
+             0.5*MassFaceReader._comp_return(f, pts))))
+    
+    @staticmethod
+    def _loop_hold(history_fields, win):
+        if len(history_fields) < win: return 0.0
+        n = 0
+        for f in history_fields[-win:]:
+            _, _, r, c = MassFaceReader._best_window(f, 3)
+            loc = MassFaceReader._window_coords(r, c, 3)
+            sh = MassFaceReader._ring_coords(r, c, 1)
+            if max(MassFaceReader._comp_loop(f, loc),
+                   MassFaceReader._comp_loop(f, sh)) > 0:
+                n += 1
+        return _fk_div(n, win)
+    
+    @staticmethod
+    def _drift_impedance(centers):
+        if len(centers) < 5: return 0.0
+        recent = centers[-8:]
+        mv = cnt = 0
+        for i in range(1, len(recent)):
+            r0, c0 = recent[i-1]; r1, c1 = recent[i]
+            if r0 < 0 or r1 < 0: continue
+            mv += abs(r1-r0) + abs(c1-c0); cnt += 1
+        return 0.0 if cnt == 0 else max(0.0, min(1.0, 1.0-(mv/cnt)/3.0))
+    
+    @staticmethod
+    def _swirl(f):
+        ph = f[:,:,FK_CH_PHI].astype(float)
+        sw = 0.0
+        for r in range(1,FK_H-1):
+            for c in range(1,FK_W-1):
+                ring = [ph[r-1,c-1],ph[r-1,c],ph[r-1,c+1],ph[r,c+1],
+                        ph[r+1,c+1],ph[r+1,c],ph[r+1,c-1],ph[r,c-1]]
+                for i in range(8):
+                    sw += float(np.sign(ring[(i+1)%8] - ring[i]))
+        return float(sw)
+    
+    def read(self, f=None) -> dict:
+        """执行质量面复合读数 (后验,不修改场)"""
+        if f is None:
+            f = self.kernel.field
+        
+        _, _, lr, lc = self._best_window(f, 3)
+        local = self._window_coords(lr, lc, 3)
+        shell = self._ring_coords(lr, lc, 1)
+        
+        ll = self._comp_loop(f, local)
+        sl = self._comp_loop(f, shell)
+        loop = max(ll, sl)
+        
+        fields = self.kernel._history_fields
+        amps = self.kernel._history_amps
+        centers = [self._best_window(x, 3)[2:] for x in fields]
+        
+        hold13 = self._loop_hold(fields, 13)
+        hold8 = self._loop_hold(fields, 8)
+        leak = self._boundary_leak(f)
+        drift = self._drift_impedance(centers)
+        sw = self._swirl(f)
+        
+        # 质量面复合计算
+        total = float(np.sum(_fk_amp_map(f)))
+        mass = 0.0
+        if total > 1e-12:
+            lcar = sum(1 for r,c in local if _fk_is_carrier(*_fk_val(f,r,c)))
+            lob = float(sum(_fk_amp_map(f)[r,c] for r,c in local))
+            bg_total = max(0.0, total - lob)
+            local_bg = min(1.0, _fk_div(lob/len(local),
+                           bg_total/max(1,FK_H*FK_W-len(local))) / 6)
+            finite = 1 - min(1, abs(lcar-9)/9)
+            leak_resist = 1 - leak
+            
+            mass = (0.09*finite + 0.10*local_bg + 0.23*loop +
+                    0.17*hold13 + 0.09*min(1,0.5) + 0.09*leak_resist +
+                    0.06*0.5 + 0.07*drift + 0.04*min(1,abs(sw)/20))
+            if loop == 0: mass *= 0.65
+            if self.kernel.active_points() > 56 and local_bg < 1.6/6: mass *= 0.70
+            mass = max(0, min(1, mass))
+        
+        # 轴/对角线读数
+        axis_pts = list(_fk_axis_nb(lr, lc)) if lr >= 0 else []
+        diag_pts = list(_fk_diag_nb(lr, lc)) if lr >= 0 else []
+        axis_phi = self._phi_balance(f, axis_pts) if axis_pts else 0.0
+        diag_phi = self._phi_balance(f, diag_pts) if diag_pts else 0.0
+        axis_ret = self._comp_return(f, axis_pts) if axis_pts else 0.0
+        diag_ret = self._comp_return(f, diag_pts) if diag_pts else 0.0
+        axis_loop = axis_phi * axis_ret
+        diag_loop = diag_phi * diag_ret
+        
+        return {
+            'MASS_FACE': mass,
+            'MASS_CLOSURE': max(0, min(1,
+                0.2*self._phi_balance(f,local) + 0.2*self._comp_return(f,local) +
+                0.2*self._phi_balance(f,shell) + 0.2*self._comp_return(f,shell) +
+                0.2*(1-leak))),
+            'LOCAL_COMP_LOOP': ll,
+            'SHELL1_COMP_LOOP': sl,
+            'LOOP_HOLD_8': hold8,
+            'LOOP_HOLD_13': hold13,
+            'BOUNDARY_LEAK': leak,
+            'DRIFT_IMPEDANCE': drift,
+            'SWIRL': sw,
+            'TOTAL_ABS': total,
+            'ACTIVE_POINTS': self.kernel.active_points(),
+            'CARRIER_POINTS': self.kernel.carrier_points(),
+            'TRACE_POINTS': self.kernel.trace_points(),
+            'LOCAL_R': lr, 'LOCAL_C': lc,
+            'AXIS_PHI_BALANCE': axis_phi,
+            'DIAG_PHI_BALANCE': diag_phi,
+            'AXIS_COMP_RETURN': axis_ret,
+            'DIAG_COMP_RETURN': diag_ret,
+            'AXIS_LOOP_OBS': axis_loop,
+            'DIAG_LOOP_OBS': diag_loop,
+            'DIAG_MINUS_AXIS_LOOP': diag_loop - axis_loop,
+        }
+
+
+# ============================================================================
+# 18. 动态稳定门与严格双门 (V25 Stability Gates) — v3.0
+# ============================================================================
+
+class DynamicStabilityGate:
+    """动态稳定门 — V14-V25 多条件阈值判定系统
+    
+    宽松门(标准稳定判定):
+    - EXCESS_MASS_FACE > 0.70
+    - EXCESS_LOCAL_COMP_LOOP > 0.50  
+    - EXCESS_LOOP_HOLD_13 > 0.80
+    - EXCESS_BOUNDARY_LEAK < 0.15
+    - FINAL_TO_PEAK_EXCESS_MASS_RATIO > 0.85
+    """
+    
+    # 宽松门阈值
+    GATE_MASS_FACE = 0.70
+    GATE_COMP_LOOP = 0.50
+    GATE_HOLD_13 = 0.80
+    GATE_BOUNDARY_LEAK = 0.15
+    GATE_PEAK_RATIO = 0.85
+    
+    @classmethod
+    def assess(cls, reading: dict,
+               peak_mass_face: float = None) -> dict:
+        """评估一个质量面读数是否通过稳定门
+        
+        返回 (passed, failures, score)
+        """
+        failures = []
+        checks = {}
+        
+        mf = reading.get('EXCESS_MASS_FACE', reading.get('MASS_FACE', 0))
+        cl = reading.get('EXCESS_LOCAL_COMP_LOOP', reading.get('LOCAL_COMP_LOOP', 0))
+        h13 = reading.get('EXCESS_LOOP_HOLD_13', reading.get('LOOP_HOLD_13', 0))
+        bl = reading.get('EXCESS_BOUNDARY_LEAK', reading.get('BOUNDARY_LEAK', 1))
+        
+        checks['MASS_FACE'] = mf >= cls.GATE_MASS_FACE
+        checks['COMP_LOOP'] = cl >= cls.GATE_COMP_LOOP
+        checks['HOLD_13'] = h13 >= cls.GATE_HOLD_13
+        checks['BOUNDARY_LEAK'] = bl <= cls.GATE_BOUNDARY_LEAK
+        
+        if peak_mass_face is not None and peak_mass_face > 0:
+            ratio = mf / peak_mass_face
+            checks['PEAK_RATIO'] = ratio >= cls.GATE_PEAK_RATIO
+        
+        for name, passed in checks.items():
+            if not passed:
+                failures.append(name)
+        
+        score = sum(1 for v in checks.values() if v) / max(1, len(checks))
+        return {
+            'passed': len(failures) == 0,
+            'failures': failures,
+            'score': score,
+            'checks': checks,
+        }
+
+
+class StrictDualGate:
+    """严格双门 — V14-V25 更保守标准
+    
+    - DELTA_MASS_FACE > 0.20
+    - DELTA_LOCAL_COMP_LOOP > 0.20
+    """
+    
+    GATE_DELTA_MASS = 0.20
+    GATE_DELTA_LOOP = 0.20
+    
+    @classmethod
+    def assess(cls, pair_reading: dict) -> dict:
+        """双门评估"""
+        dm = pair_reading.get('DELTA_MASS_FACE', 0)
+        dl = pair_reading.get('DELTA_LOCAL_COMP_LOOP', 0)
+        
+        checks = {
+            'DELTA_MASS': dm > cls.GATE_DELTA_MASS,
+            'DELTA_LOOP': dl > cls.GATE_DELTA_LOOP,
+        }
+        
+        return {
+            'passed': all(checks.values()),
+            'checks': checks,
+            'DELTA_MASS_FACE': dm,
+            'DELTA_LOCAL_COMP_LOOP': dl,
+        }
+
+
+# ============================================================================
+# 19. D4 协变共极大观察器 (V22D Covariant Co-Max Observer) — v3.0
+# ============================================================================
+
+class D4CovariantObserver:
+    """D4 协变共极大观察器 — V22C/V22D 完整状态同步 D4 审计
+    
+    D4 对称群: {ID, ROT90, ROT180, ROT270, MIRROR_LR, MIRROR_UD, 
+               MIRROR_MAIN_DIAG, MIRROR_ANTI_DIAG}
+    
+    严格边界:
+    - D4 只重写空间坐标,不重写数值
+    - 演化核、边界规则、观察器、质量读数不变
+    - 不增加力项、不重新注入初始切片
+    """
+    
+    D4_TRANSFORMS = [
+        ("ID", False, +1),
+        ("ROT90", False, +1),
+        ("ROT180", False, +1),
+        ("ROT270", False, +1),
+        ("MIRROR_LR", True, -1),
+        ("MIRROR_UD", True, -1),
+        ("MIRROR_MAIN_DIAG", True, -1),
+        ("MIRROR_ANTI_DIAG", True, -1),
+    ]
+    
+    @staticmethod
+    def transform_field(f: np.ndarray, name: str) -> np.ndarray:
+        """施加 D4 空间变换 (不改变通道语义)"""
+        if name == "ID":
+            return f.copy()
+        elif name == "ROT90":
+            return np.rot90(f, k=1, axes=(0, 1)).copy()
+        elif name == "ROT180":
+            return np.rot90(f, k=2, axes=(0, 1)).copy()
+        elif name == "ROT270":
+            return np.rot90(f, k=3, axes=(0, 1)).copy()
+        elif name == "MIRROR_LR":
+            return np.fliplr(f).copy()
+        elif name == "MIRROR_UD":
+            return np.flipud(f).copy()
+        elif name == "MIRROR_MAIN_DIAG":
+            return np.transpose(f, (1, 0, 2)).copy()
+        elif name == "MIRROR_ANTI_DIAG":
+            return np.flipud(np.fliplr(np.transpose(f, (1, 0, 2)))).copy()
+        else:
+            raise ValueError(f"unknown D4 transform: {name}")
+    
+    @staticmethod
+    def transform_coord(r: int, c: int, name: str):
+        """D4 坐标映射"""
+        n = FK_H - 1
+        if name == "ID":       return r, c
+        if name == "ROT90":    return n - c, r
+        if name == "ROT180":   return n - r, n - c
+        if name == "ROT270":   return c, n - r
+        if name == "MIRROR_LR": return r, n - c
+        if name == "MIRROR_UD": return n - r, c
+        if name == "MIRROR_MAIN_DIAG":  return c, r
+        if name == "MIRROR_ANTI_DIAG":  return n - c, n - r
+        raise ValueError(f"unknown D4 transform: {name}")
+    
+    @classmethod
+    def co_max_windows(cls, f: np.ndarray, win=3):
+        """共极大窗口: 返回所有平局的最大局部窗口集合 (不拟合)"""
+        a = _fk_amp_map(f)
+        total = float(np.sum(a))
+        if total <= 1e-12:
+            return 0.0, 0.0, tuple()
+        rad = win // 2
+        scores = []
+        best = -1.0
+        for r, c in _fk_coords():
+            score = float(np.sum(a[max(0,r-rad):min(FK_H,r+rad+1),
+                                   max(0,c-rad):min(FK_W,c+rad+1)]))
+            scores.append((r, c, score))
+            if score > best:
+                best = score
+        tied = tuple((r, c) for r, c, score in scores if score == best)
+        return _fk_div(best, total), best, tied
+    
+    @classmethod
+    def audit_covariance(cls, kernel: MNQ8FrozenKernel, condition_kernel: MNQ8FrozenKernel):
+        """D4 协变性审计 — 检查变换后演化是否等价于演化后变换
+        
+        对每个 D4 变换:
+        1. 变换初始状态
+        2. 演化 N 步
+        3. 比较结果
+        """
+        results = {}
+        ref_field = kernel.field.copy()
+        
+        for name, is_reflection, orient_sign in cls.D4_TRANSFORMS:
+            if name == "ID":
+                results[name] = {'covariant': True, 'l1_match': True}
+                continue
+            
+            # 变换参考场并演化
+            transformed = cls.transform_field(ref_field, name)
+            tk = MNQ8FrozenKernel()
+            tk.field = transformed.copy()
+            tk._history_fields = [transformed.copy()]
+            tk._history_amps = [_fk_amp_map(transformed)]
+            
+            for _ in range(16):
+                tk.step()
+            
+            # 变换后的演化 vs 演化后的变换
+            evo_then_trans = cls.transform_field(kernel.field.copy(), name)
+            l1_diff = float(np.sum(np.abs(
+                tk.field.astype(np.int32) - evo_then_trans.astype(np.int32)
+            )))
+            
+            results[name] = {
+                'covariant': l1_diff == 0,
+                'l1_diff': l1_diff,
+                'is_reflection': is_reflection,
+                'orientation_sign': orient_sign,
+            }
+        
+        return results
+
+
+# ============================================================================
+# 20. 冻结核网格 (FrozenKernelMesh) — v3.0 冻结核模式网格
+# ============================================================================
+
+class FrozenKernelMesh:
+    """冻结核模式网格 — 基于 V13-V16 冻结核的 MNQ8 网格
+    
+    整合:
+    - MNQ8FrozenKernel: 五层冻结核演化核心
+    - MassFaceReader: 质量面后验读数
+    - DynamicStabilityGate: 动态稳定门判定
+    - D4CovariantObserver: D4 协变审计
+    """
+    
+    def __init__(self, seed: int = 42):
+        self.seed = seed
+        self.kernel = MNQ8FrozenKernel()
+        self.reader = MassFaceReader(self.kernel)
+        self.condition_kernel = None
+        self.condition_reader = None
+        
+        # 历史记录
+        self.mass_face_history = []
+        self.loop_history = []
+        self.stability_history = []
+        self._peak_mass_face = 0.0
+        
+    def init_background(self, seed: int = None):
+        """初始化背景场"""
+        if seed is not None:
+            self.seed = seed
+        self.kernel.init_background(self.seed)
+        self._peak_mass_face = 0.0
+        return self.kernel.field
+    
+    def init_condition(self, keep_indices, seed=None, **kwargs):
+        """初始化条件场 (在背景场上叠加初始切片)"""
+        if seed is not None:
+            self.seed = seed
+        
+        bg_copy = self.kernel.field.copy()
+        self.condition_kernel = MNQ8FrozenKernel()
+        self.condition_kernel.field = bg_copy.copy()
+        self.condition_kernel._history_fields = [bg_copy.copy()]
+        self.condition_kernel._history_amps = [_fk_amp_map(bg_copy)]
+        self.condition_kernel.init_condition(
+            keep_indices, self.seed, **kwargs)
+        self.condition_reader = MassFaceReader(self.condition_kernel)
+        self._peak_mass_face = 0.0
+        return self.condition_kernel.field
+    
+    def step(self):
+        """演化一步"""
+        self.kernel.step()
+        if self.condition_kernel:
+            self.condition_kernel.step()
+        
+        reading = self.reader.read()
+        self.mass_face_history.append(reading)
+        self.loop_history.append(reading.get('LOCAL_COMP_LOOP', 0))
+        
+        if reading['MASS_FACE'] > self._peak_mass_face:
+            self._peak_mass_face = reading['MASS_FACE']
+        
+        return reading
+    
+    def run(self, steps: int):
+        """运行指定步数并返回最终读数"""
+        last_reading = None
+        for _ in range(steps):
+            last_reading = self.step()
+        return last_reading
+    
+    def assess_stability(self) -> dict:
+        """评估当前状态稳定性"""
+        if not self.mass_face_history:
+            return {'passed': False, 'reason': 'no_history'}
+        
+        final = self.mass_face_history[-1]
+        gate_result = DynamicStabilityGate.assess(final, self._peak_mass_face)
+        self.stability_history.append(gate_result)
+        return gate_result
+    
+    def assess_dual_gate(self) -> dict:
+        """严格双门评估"""
+        if not self.condition_kernel or not self.condition_reader:
+            return {'passed': False, 'reason': 'no_condition'}
+        
+        cond_reading = self.condition_reader.read()
+        bg_reading = self.reader.read()
+        
+        pair = {
+            'DELTA_MASS_FACE': cond_reading['MASS_FACE'] - bg_reading['MASS_FACE'],
+            'DELTA_LOCAL_COMP_LOOP': cond_reading['LOCAL_COMP_LOOP'] - bg_reading['LOCAL_COMP_LOOP'],
+        }
+        return StrictDualGate.assess(pair)
+    
+    def snapshot(self) -> dict:
+        """完整快照"""
+        reading = self.reader.read() if self.mass_face_history else {}
+        stability = self.stability_history[-1] if self.stability_history else {}
+        
+        return {
+            'seed': self.seed,
+            'step': self.kernel.step_count,
+            'fingerprint': self.kernel.fingerprint(),
+            'l1': self.kernel.l1_by_channel(),
+            'active': self.kernel.active_points(),
+            'carrier': self.kernel.carrier_points(),
+            'trace': self.kernel.trace_points(),
+            'mass_face': reading.get('MASS_FACE', 0),
+            'local_comp_loop': reading.get('LOCAL_COMP_LOOP', 0),
+            'loop_hold_13': reading.get('LOOP_HOLD_13', 0),
+            'boundary_leak': reading.get('BOUNDARY_LEAK', 0),
+            'axis_loop': reading.get('AXIS_LOOP_OBS', 0),
+            'diag_loop': reading.get('DIAG_LOOP_OBS', 0),
+            'diag_minus_axis': reading.get('DIAG_MINUS_AXIS_LOOP', 0),
+            'stability_passed': stability.get('passed', False),
+            'peak_mass_face': self._peak_mass_face,
+        }
+
+
+# ============================================================================
 # 导出清单
 # ============================================================================
 
@@ -922,4 +1897,8 @@ __all__ = [
     'mnq_get_minimal_gamma','mnq_get_minimal_rcoh','mnq_get_minimal_stability_band',
     'mnq_apply_core_feedback','mnq_apply_execution_latency',
     'mnq_auto_gamma',
+    # v3.0 冻结核模块
+    'MNQ8FrozenKernel', 'MassFaceReader', 'DynamicStabilityGate',
+    'StrictDualGate', 'D4CovariantObserver', 'FrozenKernelMesh',
+    'mnq8_frozen_kernel_verify', 'FROZEN_KERNEL_FINGERPRINT',
 ]

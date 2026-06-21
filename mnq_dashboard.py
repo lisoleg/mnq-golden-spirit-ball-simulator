@@ -1,18 +1,24 @@
 """
-MNQ 金灵球网络仿真器 v2.0 - Windows GUI 仪表盘
+MNQ 金灵球网络仿真器 v3.0 - Windows GUI 仪表盘
 基于 tkinter + matplotlib 实现
 
-v2.0 新增:
-1. MNQ9 信心核面板 (Ω/φ_future/B_conf 宏观趋势)
-2. 三层信息波可视化 (核心→八卦→64卦 SCF收敛)
-3. CGD约束生成动力学面板 (五公理A1-A5)
+v3.0 新增:
+1. MNQ8 冻结核 (V13-V16五层法则: core→bagua→hex64→wuxing→commit)
+2. MASS_FACE 质量面复合读数 + 动态稳定门
+3. D4 协变共极大观察器 (8种D4对称变换)
+4. 严格双门评估 (DELTA_MASS/DELTA_LOOP)
+
+v2.0 功能:
+5. MNQ9 信心核面板 (Ω/φ_future/B_conf 宏观趋势)
+6. 三层信息波可视化 (核心→八卦→64卦 SCF收敛)
+7. CGD约束生成动力学面板 (五公理A1-A5)
 
 原有功能:
-4. 金灵球网络 2D 热力图可视化 (流贯场/质量面/Oloid差分)
-5. MNQ8 能流运算实时监控 + 三元动力核 (φ/Ω/γ)
-6. Hex64 卦象映射 + 刘机制路径追踪
-7. 实验组别切换 (死零场/背景/HEX_RING_GAP)
-8. GPU四场仿真 + MNQ Cloud API 兼容仿真
+8. 金灵球网络 2D 热力图可视化 (流贯场/质量面/Oloid差分)
+9. MNQ8 能流运算实时监控 + 三元动力核 (φ/Ω/γ)
+10. Hex64 卦象映射 + 刘机制路径追踪
+11. 实验组别切换 (死零场/背景/HEX_RING_GAP)
+12. GPU四场仿真 + MNQ Cloud API 兼容仿真
 """
 
 import tkinter as tk
@@ -33,6 +39,10 @@ from mnq_core import (
     MNQMinimalState, mnq_minimal_step, mnq_auto_gamma,
     GoldenSymbol3D, get_hex64_rule, HEX64_TABLE, bagua_apply, BaguaOp,
     ThreeLayerInfoWave, CGDEngine, CGDConstraint,
+    # v3.0 冻结核
+    MNQ8FrozenKernel, MassFaceReader, DynamicStabilityGate,
+    StrictDualGate, D4CovariantObserver, FrozenKernelMesh,
+    mnq8_frozen_kernel_verify, FROZEN_KERNEL_FINGERPRINT,
 )
 from mnq9_core import (
     MNQ9Simulator, MNQ9ScenarioGenerator, MacroConfidenceField, MNQ9Core,
@@ -61,7 +71,7 @@ class MNQDashboard:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("MNQ 金灵球网络仿真器 v2.0 - Windows Edition")
+        self.root.title("MNQ 金灵球网络仿真器 v3.0 - Windows Edition")
         self.root.geometry("1600x950")
         self.root.configure(bg=self.COLORS['bg_dark'])
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -87,6 +97,15 @@ class MNQDashboard:
         self.mnq9_sim.set_macro_confidence({'M2': 0.2, 'PMI': 0.1, 'DR007': -0.1})
         self.mnq9_sim.set_future_wave([0.05]*20)
 
+        # v3.0 冻结核实例
+        self.fk_mesh = FrozenKernelMesh(seed=42)
+        self.fk_mesh.init_background()
+        keep_hex = [0,1,5,6,7,8,10,11,12,13,15]  # G5_V13_ARC
+        self.fk_mesh.init_condition(keep_hex, seed=42, phi_polarity=1,
+                                    omega_mode="MASK", comp_mode="MASK",
+                                    phi_gain=1, center_anchor=1)
+        self.fk_d4_last = None
+
         # 历史记录
         self.mass_history = deque(maxlen=200)
         self.loop_history = deque(maxlen=200)
@@ -99,6 +118,9 @@ class MNQDashboard:
         self.mnq9_omega_history = deque(maxlen=200)
         self.mnq9_bconf_history = deque(maxlen=200)
         self.cgd_violation_history = deque(maxlen=200)
+        # v3.0 冻结核历史
+        self.fk_mass_face_history = deque(maxlen=200)
+        self.fk_loop_history = deque(maxlen=200)
 
         # 构建UI
         self._build_ui()
@@ -139,12 +161,12 @@ class MNQDashboard:
         title_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
         title_frame.pack_propagate(False)
 
-        tk.Label(title_frame, text="⬡ MNQ 金灵球网络仿真器 v2.0",
+        tk.Label(title_frame, text="⬡ MNQ 金灵球网络仿真器 v3.0",
                  font=("Microsoft YaHei", 16, "bold"),
                  fg=self.COLORS['gold'], bg=self.COLORS['bg_dark']).pack(side=tk.LEFT)
 
         tk.Label(title_frame,
-                 text="IWPU · CGD约束 · 三层信息波 · MNQ9信心核 · N₈拓扑 · PG囚禁",
+                 text="冻结核 · D4协变 · MASS_FACE · CGD约束 · 三层信息波 · MNQ9",
                  font=("Microsoft YaHei", 9),
                  fg=self.COLORS['text_dim'], bg=self.COLORS['bg_dark']).pack(side=tk.LEFT, padx=20)
 
@@ -352,6 +374,32 @@ class MNQDashboard:
         for c in self.cgd_engine.constraints:
             lo, hi = c.target_range
             self.cgd_listbox.insert(tk.END, f"  {c.name}: [{lo:.1f}, {hi:.1f}] v={c.current_value:.4f}")
+
+        # ---- 冻结核面板 [v3.0新增] ----
+        fk_frame = tk.LabelFrame(scroll_frame, text=" ❄ MNQ8 冻结核 (V13-V16) ",
+                                  bg=self.COLORS['bg_panel'], fg=self.COLORS['gold'],
+                                  font=("Microsoft YaHei", 9, "bold"), bd=1)
+        fk_frame.pack(fill=tk.X, padx=5, pady=3)
+
+        self.lbl_fk_mass  = self._make_param_row(fk_frame, "MASS_FACE", "0.0000")
+        self.lbl_fk_loop  = self._make_param_row(fk_frame, "Local Comp Loop", "0.0000")
+        self.lbl_fk_hold  = self._make_param_row(fk_frame, "Loop Hold 13", "0.0000")
+        self.lbl_fk_leak  = self._make_param_row(fk_frame, "Boundary Leak", "0.0000")
+        self.lbl_fk_diag  = self._make_param_row(fk_frame, "DIAG-AXIS Loop", "0.0000")
+        self.lbl_fk_stab  = self._make_param_row(fk_frame, "Stability Gate", "---")
+        self.lbl_fk_finger = self._make_param_row(fk_frame, "SHA256", "---")
+
+        fk_btn_frame = tk.Frame(fk_frame, bg=self.COLORS['bg_panel'])
+        fk_btn_frame.pack(fill=tk.X, padx=3, pady=2)
+        tk.Button(fk_btn_frame, text="冻结核步进", command=self._fk_step,
+                  bg=self.COLORS['bg_card'], fg=self.COLORS['text'],
+                  font=("Microsoft YaHei", 8)).pack(side=tk.LEFT, padx=2)
+        tk.Button(fk_btn_frame, text="重置冻结核", command=self._fk_reset,
+                  bg='#666', fg='white',
+                  font=("Microsoft YaHei", 8)).pack(side=tk.LEFT, padx=2)
+        tk.Button(fk_btn_frame, text="D4审计", command=self._fk_d4_audit,
+                  bg='#8b5cf6', fg='white',
+                  font=("Microsoft YaHei", 8)).pack(side=tk.LEFT, padx=2)
 
         # ---- Hex64 卦象 ----
         hex_frame = tk.LabelFrame(scroll_frame, text=" ☰ Hex64 六十四卦映射 ",
@@ -694,6 +742,18 @@ class MNQDashboard:
         self.lbl_s_rel.config(text=f"{self.liu_scheduler.min_s_rel:.4f}")
         self.lbl_path_len.config(text=f"{len(self.liu_scheduler.optimal_path)}")
 
+        # v3.0 冻结核
+        r = self.fk_mesh.reader.read()
+        self.lbl_fk_mass.config(text=f"{r['MASS_FACE']:.6f}")
+        self.lbl_fk_loop.config(text=f"{r['LOCAL_COMP_LOOP']:.4f}")
+        self.lbl_fk_hold.config(text=f"{r['LOOP_HOLD_13']:.4f}")
+        self.lbl_fk_leak.config(text=f"{r['BOUNDARY_LEAK']:.4f}")
+        self.lbl_fk_diag.config(text=f"{r['DIAG_MINUS_AXIS_LOOP']:.4f}")
+        stab = self.fk_mesh.assess_stability()
+        self.lbl_fk_stab.config(
+            text=f"{'PASS' if stab['passed'] else 'FAIL'} ({stab['score']:.2f})")
+        self.lbl_fk_finger.config(text=f"{self.fk_mesh.kernel.fingerprint()[:12]}...")
+
         # 更新CGD列表
         self.cgd_listbox.delete(0, tk.END)
         for c in self.cgd_engine.constraints:
@@ -709,6 +769,7 @@ class MNQDashboard:
                  f"MF={self.mesh.mass_face_count} | "
                  f"γ={m.gamma:.5f} | "
                  f"Ω9={om:.3f} | "
+                 f"FK={r['MASS_FACE']:.3f} | "
                  f"CGD={'OK' if violation<1e-4 else 'VIOL'}"
         )
 
@@ -784,6 +845,40 @@ class MNQDashboard:
         self._log(f"MNQ9趋势: {report['trend_direction']} "
                   f"strength={report['trend_strength']:.4f} "
                   f"vol={report['trend_volatility']:.4f}")
+        self._refresh_all_plots()
+
+    # ---- v3.0 冻结核操作 ----
+
+    def _fk_step(self):
+        """冻结核单步演化"""
+        self.fk_mesh.step()
+        r = self.fk_mesh.reader.read()
+        self.fk_mass_face_history.append(r['MASS_FACE'])
+        self.fk_loop_history.append(r['LOCAL_COMP_LOOP'])
+        self._log(f"冻结核 Step {self.fk_mesh.kernel.step_count}: "
+                  f"MF={r['MASS_FACE']:.4f} LOOP={r['LOCAL_COMP_LOOP']:.4f}")
+        self._refresh_all_plots()
+
+    def _fk_reset(self):
+        """重置冻结核"""
+        self.fk_mesh = FrozenKernelMesh(seed=42)
+        self.fk_mesh.init_background()
+        keep_hex = [0,1,5,6,7,8,10,11,12,13,15]
+        self.fk_mesh.init_condition(keep_hex, seed=42, phi_polarity=1,
+                                    omega_mode="MASK", comp_mode="MASK",
+                                    phi_gain=1, center_anchor=1)
+        self.fk_mass_face_history.clear()
+        self.fk_loop_history.clear()
+        self.fk_d4_last = None
+        self._log("冻结核已重置")
+        self._refresh_all_plots()
+
+    def _fk_d4_audit(self):
+        """D4协变性审计"""
+        self.fk_d4_last = D4CovariantObserver.audit_covariance(
+            self.fk_mesh.kernel, self.fk_mesh.kernel)
+        ok_count = sum(1 for r in self.fk_d4_last.values() if r.get('covariant'))
+        self._log(f"D4审计: {ok_count}/{len(self.fk_d4_last)} 变换协变")
         self._refresh_all_plots()
 
     def _log(self, msg: str):
@@ -935,8 +1030,94 @@ def run_cli_simulation():
               f"dir={report['trend_direction']} "
               f"vol={report['trend_volatility']:.4f}")
 
+    # ---- v3.0 新增实验 ----
+    from mnq_core import (
+        MNQ8FrozenKernel, MassFaceReader, DynamicStabilityGate,
+        StrictDualGate, D4CovariantObserver, FrozenKernelMesh,
+        mnq8_frozen_kernel_verify, FROZEN_KERNEL_FINGERPRINT,
+    )
+
     print("\n" + "=" * 60)
-    print("  全部12项实验完成!")
+    print("  v3.0 冻结核实验 (基于 V13-V25 质量生成实验链)")
+    print("=" * 60)
+
+    print("\n[实验13] 冻结核 SHA256 完整性验证")
+    verified = mnq8_frozen_kernel_verify()
+    print(f"  冻结核指纹验证: {'通过' if verified else '失败'}")
+    print(f"  期望 SHA256: {FROZEN_KERNEL_FINGERPRINT[:16]}...")
+
+    print("\n[实验14] MNQ8 冻结核演化 - 背景场")
+    fkm = FrozenKernelMesh(seed=42)
+    fkm.init_background()
+    print(f"  初始背景: L1={fkm.kernel.l1_by_channel()}, "
+          f"active={fkm.kernel.active_points()}")
+    fkm.run(64)
+    final = fkm.snapshot()
+    print(f"  64步后: MASS_FACE={final['mass_face']:.6f}, "
+          f"active={final['active']}, carrier={final['carrier']}")
+    print(f"  SHA256: {final['fingerprint'][:16]}...")
+
+    print("\n[实验15] 冻结核条件场 - HEX_RING_GAP 质量面前体")
+    keep_hex = [0,1,5,6,7,8,10,11,12,13,15]  # G5_V13_ARC
+    fkm2 = FrozenKernelMesh(seed=42)
+    fkm2.init_background()
+    fkm2.init_condition(keep_hex, seed=42, phi_polarity=1,
+                        omega_mode="MASK", comp_mode="MASK", phi_gain=1, center_anchor=1)
+    trace_iters = {0,1,2,5,13,34,89,233,383}
+    for i in range(384):
+        fkm2.step()
+        if i in trace_iters:
+            r = fkm2.reader.read()
+            print(f"  ITER={fkm2.kernel.step_count:4d}: MASS_FACE={r['MASS_FACE']:.6f}, "
+                  f"LOOP={r['LOCAL_COMP_LOOP']:.4f}")
+    final2 = fkm2.snapshot()
+    print(f"  ITER=384: MASS_FACE={final2['mass_face']:.6f}, "
+          f"peak={final2['peak_mass_face']:.6f}")
+    stability = fkm2.assess_stability()
+    print(f"  动态稳定门: {'通过' if stability['passed'] else '未通过'}")
+    if not stability['passed']:
+        print(f"  未通过项: {stability['failures']}")
+
+    print("\n[实验16] D4 协变性审计")
+    fkm3 = FrozenKernelMesh(seed=42)
+    fkm3.init_background()
+    fkm3.run(64)
+    d4r = D4CovariantObserver.audit_covariance(fkm3.kernel, fkm3.kernel)
+    for name in ['ID','ROT90','ROT180','ROT270','MIRROR_LR']:
+        r = d4r.get(name, {})
+        ok = 'OK' if r.get('covariant') else 'FAIL'
+        print(f"  {name:20s}: {ok}")
+
+    print("\n[实验17] 严格双门评估 - 条件vs背景差分")
+    keep_cross = [0,1,3,4,5,7,8,9,11,12,13,15]  # G4_CROSS
+    fkm4 = FrozenKernelMesh(seed=42)
+    fkm4.init_background()
+    fkm4.init_condition(keep_cross, seed=42, phi_polarity=1,
+                        omega_mode="MASK", comp_mode="MASK", phi_gain=1, center_anchor=1)
+    fkm4.run(384)
+    dual = fkm4.assess_dual_gate()
+    print(f"  严格双门: {'通过' if dual['passed'] else '未通过'}")
+    print(f"  DELTA_MASS_FACE={dual.get('DELTA_MASS_FACE',0):.6f}")
+    print(f"  DELTA_LOCAL_COMP_LOOP={dual.get('DELTA_LOCAL_COMP_LOOP',0):.6f}")
+
+    print("\n[实验18] MASS_FACE 复合读数 - 六维测量")
+    fkm5 = FrozenKernelMesh(seed=42)
+    fkm5.init_background()
+    fkm5.init_condition(keep_hex, seed=42, phi_polarity=1,
+                        omega_mode="MASK", comp_mode="MASK", phi_gain=1, center_anchor=1)
+    fkm5.run(384)
+    r = fkm5.reader.read()
+    print(f"  质量面 MASS_FACE:     {r['MASS_FACE']:.6f}")
+    print(f"  质量闭合 MASS_CLOSURE: {r['MASS_CLOSURE']:.6f}")
+    print(f"  局部补偿回路 LOOP:     {r['LOCAL_COMP_LOOP']:.4f}")
+    print(f"  持存 HOLD_13:          {r['LOOP_HOLD_13']:.4f}")
+    print(f"  边界泄漏 LEAK:         {r['BOUNDARY_LEAK']:.6f}")
+    print(f"  漂移阻抗 DRIFT:        {r['DRIFT_IMPEDANCE']:.4f}")
+    print(f"  轴/对角线回路:        AXIS={r['AXIS_LOOP_OBS']:.4f} "
+          f"DIAG={r['DIAG_LOOP_OBS']:.4f}")
+
+    print("\n" + "=" * 60)
+    print("  全部18项实验完成! (v2.0: 12项 + v3.0: 6项)")
     print("=" * 60)
 
 

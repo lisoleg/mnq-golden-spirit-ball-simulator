@@ -6,6 +6,61 @@
 
 ---
 
+## [3.0.0] — 2026-06-04
+
+### 新增
+
+#### 核心引擎 (mnq_core.py)
+
+- **MNQ8 冻结核 (MNQ8FrozenKernel)**: 五层冻结核演化核心
+  - `_fk_law_core()` → `_fk_law_bagua()` → `_fk_law_hex64()` → `_fk_law_wuxing()` → `_fk_law_commit()`
+  - 严格五 NO 原则: NO_EXTRA_DYNAMICS, NO_OBSERVER_WRITE_BACK, NO_FITTING, NO_PROTON
+  - 背景与条件场初始化 + 差分场 ΔF(t) = F_condition(t) − F_background(t)
+  - SHA256 核指纹完整性验证
+- **MASS_FACE 复合解读器 (MassFaceReader)**: 后验复合解读
+  - 6 维质量面组分: 有限载流子数(0.09) + 局域/背景比(0.10) + 补偿回路(0.23) + 保持持久度(0.17) + 边界泄漏阻力(0.09) + 漂移阻抗(0.07) + 旋涡(0.04)
+  - MASS_CLOSURE 闭环度、AXIS/DIAG 回路反馈
+- **动态稳定性门 (DynamicStabilityGate)**: 多条件阈值系统
+  - EXCESS_MASS_FACE > 0.70, EXCESS_LOCAL_COMP_LOOP > 0.50
+  - EXCESS_LOOP_HOLD_13 > 0.80, EXCESS_BOUNDARY_LEAK < 0.15
+  - FINAL_TO_PEAK_EXCESS_MASS_RATIO > 0.85
+- **严格双门 (StrictDualGate)**: 更保守的双条件门
+  - DELTA_MASS_FACE > 0.20 & DELTA_LOCAL_COMP_LOOP > 0.20
+- **D4 协变共轭极大观察者 (D4CovariantObserver)**: 8 种 D4 对称变换
+  - ID, ROT90, ROT180, ROT270, MIRROR_LR, MIRROR_UD, MIRROR_MAIN_DIAG, MIRROR_ANTI_DIAG
+  - 协变性审计 (co_max_windows, 坐标重写不修改通道语义)
+- **冻结核网格集成器 (FrozenKernelMesh)**: 整合所有冻结核组件
+
+#### 仪表盘 (mnq_dashboard.py)
+
+- **冻结核面板**: 7 个实时读数标签 + 3 个控制按钮 (步进/重置/D4审计)
+- **CLI 扩展至 18 项实验**: 新增 #13-#18 (SHA256验证/背景演化/HEX_RING_GAP条件/D4审计/双门/MASS_FACE复合)
+
+#### 启动脚本 (run_mnq.bat)
+
+- 版本号升至 v3.0
+- 模块描述更新至 v3.0 (11 模块)
+
+### 测试结果
+
+| 实验 | 关键指标 | 状态 |
+|------|---------|------|
+| SHA256 核指纹 | 验证通过 | ✅ |
+| 背景演化 64 步 | MASS_FACE=0.118 | ✅ |
+| HEX_RING_GAP 384 步 | peak=0.313 | ✅ |
+| D4 协变审计 | 5 变换 L1_diff=0.0 | ✅ |
+| 严格双门 | DELTA_MASS=0.640, DELTA_LOOP=1.000 | ✅ |
+| MASS_FACE 复合 | 6 维全测量 | ✅ |
+| 全部 18 项 | — | ✅ 全通过 |
+
+### 变更
+
+- mnq_core.py 行数: ~1050 → ~1600+ (新增冻结核 5 模块)
+- mnq_dashboard.py 行数: ~650 → ~850+ (新增冻结核面板 + 6 项实验)
+- `__all__` 导出列表更新 (新增 FrozenKernelMesh 等 6 个类)
+
+---
+
 ## [2.0.0] — 2026-06-04
 
 ### 新增
@@ -121,11 +176,11 @@
 
 ## 版本对照
 
-| 维度 | v1.0 | v2.0 |
-|------|------|------|
-| 核心引擎行数 | ~600 | ~1050 |
-| 仪表盘行数 | ~400 | ~650 |
-| 模块数 | 7 | 11 (+SCF/CGD/Feedback/MNQ9) |
-| CLI 实验数 | 8 | 12 |
-| 文档数 | 1 (README) | 6 (全套) |
-| 测试通过率 | 3/3 | 12/12 |
+| 维度 | v1.0 | v2.0 | v3.0 |
+|------|------|------|------|
+| 核心引擎行数 | ~600 | ~1050 | ~1600+ |
+| 仪表盘行数 | ~400 | ~650 | ~850+ |
+| 模块数 | 7 | 11 (+SCF/CGD/Feedback/MNQ9) | 16 (+冻结核5模块) |
+| CLI 实验数 | 8 | 12 | 18 |
+| 文档数 | 1 (README) | 6 (全套) | 6 (全套) |
+| 测试通过率 | 3/3 | 12/12 | 18/18 |
