@@ -5,3 +5,7 @@ __pycache__/
 .venv/
 *.tmp
 .mpl_config/
+node_modules/
+dist/
+*.log
+.env
