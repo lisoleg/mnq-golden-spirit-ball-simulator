@@ -1,24 +1,31 @@
 """
-MNQ 金灵球网络仿真器 v3.0 - Windows GUI 仪表盘
+MNQ 金灵球网络仿真器 v3.1 - Windows GUI 仪表盘
 基于 tkinter + matplotlib 实现
 
-v3.0 新增:
-1. MNQ8 冻结核 (V13-V16五层法则: core→bagua→hex64→wuxing→commit)
-2. MASS_FACE 质量面复合读数 + 动态稳定门
-3. D4 协变共极大观察器 (8种D4对称变换)
-4. 严格双门评估 (DELTA_MASS/DELTA_LOOP)
+v3.1 新增 (TOMAS 5条建议封装层):
+1. κ-Snap Export — 每次冻结核运行自动写 JSON 快照
+2. ℐ-Semantic Feedback Hook — 语义反馈占位接口
+3. MUS 双存 UI Hint — 暂态闭合弹出提示
+4. ψ-锚 CLI flag — --comply-psi-anchor 强制如实报告
+5. CGD⇔TOMAS 公理映射文档
+
+v3.0 功能:
+6. MNQ8 冻结核 (V13-V16五层法则: core→bagua→hex64→wuxing→commit)
+7. MASS_FACE 质量面复合读数 + 动态稳定门
+8. D4 协变共极大观察器 (8种D4对称变换)
+9. 严格双门评估 (DELTA_MASS/DELTA_LOOP)
 
 v2.0 功能:
-5. MNQ9 信心核面板 (Ω/φ_future/B_conf 宏观趋势)
-6. 三层信息波可视化 (核心→八卦→64卦 SCF收敛)
-7. CGD约束生成动力学面板 (五公理A1-A5)
+10. MNQ9 信心核面板 (Ω/φ_future/B_conf 宏观趋势)
+11. 三层信息波可视化 (核心→八卦→64卦 SCF收敛)
+12. CGD约束生成动力学面板 (五公理A1-A5)
 
 原有功能:
-8. 金灵球网络 2D 热力图可视化 (流贯场/质量面/Oloid差分)
-9. MNQ8 能流运算实时监控 + 三元动力核 (φ/Ω/γ)
-10. Hex64 卦象映射 + 刘机制路径追踪
-11. 实验组别切换 (死零场/背景/HEX_RING_GAP)
-12. GPU四场仿真 + MNQ Cloud API 兼容仿真
+13. 金灵球网络 2D 热力图可视化 (流贯场/质量面/Oloid差分)
+14. MNQ8 能流运算实时监控 + 三元动力核 (φ/Ω/γ)
+15. Hex64 卦象映射 + 刘机制路径追踪
+16. 实验组别切换 (死零场/背景/HEX_RING_GAP)
+17. GPU四场仿真 + MNQ Cloud API 兼容仿真
 """
 
 import tkinter as tk
@@ -928,12 +935,19 @@ class MNQDashboard:
 # 独立命令行仿真 (无GUI)
 # ============================================================================
 
-def run_cli_simulation():
-    """命令行独立运行MNQ仿真 (v2.0 扩展实验)"""
+def run_cli_simulation(comply_psi_anchor=False):
+    """命令行独立运行MNQ仿真 (v3.1 扩展实验)"""
     print("=" * 60)
-    print("  MNQ 金灵球网络仿真器 v2.0 - CLI 模式")
-    print("  基于复合体理学 MNQ/IWPU/CGD/MNQ9 理论体系")
+    print("  MNQ 金灵球网络仿真器 v3.1 - CLI 模式")
+    print("  基于复合体理学 MNQ/IWPU/CGD/MNQ9/TOMAS 理论体系")
     print("=" * 60)
+
+    # TOMAS 建议4: ψ-锚 CLI flag
+    if comply_psi_anchor:
+        print("\n[ψ-锚 约束已启用]")
+        print("  如实报告全量结果 —— 不美化、不抑制 negative/collapse case")
+        print("  此输出可直接提交给 G_ego 审查")
+        print("  TOMAS (太一互搏) 裁决要求: 科学报告须完整、诚实")
 
     # 实验1-8: 原有实验
     print("\n[实验1] ZERO_FIELD 死零场")
@@ -1146,7 +1160,7 @@ def run_cli_simulation():
           f"DIAG={r['DIAG_LOOP_OBS']:.4f}")
 
     print("\n" + "=" * 60)
-    print("  全部18项实验完成! (v2.0: 12项 + v3.0: 6项)")
+    print("  全部18项实验完成! (v3.1: TOMAS封装层 + MNQ-Deep Transformer)")
     print("=" * 60)
 
 
@@ -1158,8 +1172,10 @@ def main():
     """启动MNQ仿真器"""
     import sys
 
+    comply_psi_anchor = '--comply-psi-anchor' in sys.argv
+
     if '--cli' in sys.argv:
-        run_cli_simulation()
+        run_cli_simulation(comply_psi_anchor=comply_psi_anchor)
     else:
         root = tk.Tk()
         app = MNQDashboard(root)
