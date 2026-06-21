@@ -1833,12 +1833,6 @@ class FrozenKernelMesh:
         
         return reading
     
-    def run(self, steps: int):
-        """运行指定步数并返回最终读数"""
-        last_reading = None
-        for _ in range(steps):
-            last_reading = self.step()
-        return last_reading
     
     def assess_stability(self) -> dict:
         """评估当前状态稳定性"""
@@ -1935,10 +1929,25 @@ class FrozenKernelMesh:
         return feedback
 
     def run(self, steps: int, enable_kappa_snap=True, enable_semantic_feedback=True):
-        """运行指定步数并返回最终读数 (modified for TOMAS)"""
+        """运行指定步数并返回最终读数 (modified for TOMAS)
+        
+        Returns:
+            dict: 包含质量面读数 + 门判定结果
+        """
         last_reading = None
         for _ in range(steps):
             last_reading = self.step()
+
+        # 计算门判定结果
+        strict_result = self.assess_dual_gate()
+        dynamic_result = self.assess_stability()
+        
+        # 将门结果添加到读数字典
+        if last_reading is not None:
+            last_reading['strict_gate'] = 'PASS' if strict_result.get('passed') else 'FAIL'
+            last_reading['dynamic_gate'] = 'PASS' if dynamic_result.get('passed') else 'FAIL'
+            last_reading['strict_gate_detail'] = strict_result
+            last_reading['dynamic_gate_detail'] = dynamic_result
 
         if enable_kappa_snap:
             kappa_snap_export(self)
