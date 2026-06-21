@@ -1,20 +1,26 @@
 """
-MNQ 金灵球网络仿真器  v2.0 - Windows 版
-基于复合体理学 MNQ8/MNQ9 理论体系 + CGD约束生成动力学
+MNQ 金灵球网络仿真器  v3.1 - Windows 版
+基于复合体理学 MNQ8/MNQ9 理论体系 + CGD约束生成动力学 + TOMAS 封装层
 
-核心模块升级:
+核心模块:
 1. 金符学 3D复广数 (a + bi + cj) 及阴龙积⊙运算
 2. 金灵球 (JinlingSphere) N₈邻域耦合
 3. MNQ8 能流运算引擎 — 流贯(Ftel)传播与囚禁检测
 4. 三元动力核 (φ-Ω-γ) 极简公式 (φ=Ω-½递归)
 5. 三层信息波体系 (核心→八卦→64卦) — SCF收敛
-6. CGD约束生成动力学 (五公理A1-A5)
+6. CGD约束生成动力学 (五公理A1-A5) + TOMAS公理映射
 7. 八卦算子模板 (8算子→64模板组合)
 8. 最小反馈机制 (minimal_feedback)
 9. MNQ9 信心核模型 (Ω/φ_future/B_conf)
 10. Hex64 六十四卦映射 (x86指令→卦象→能流参数)
 11. PG拓扑囚禁检测 (Oloid差分 + 鲁珀特之泪判定)
 12. 刘机制 (LiuMechanism) 最小阻抗路径选择
+13. MNQ8 冻结核 (V13-V16 五层法则: core→bagua→hex64→wuxing→commit)
+14. MASS_FACE 质量面复合读数 + 动态稳定门
+15. D4 协变共极大观察器 (8种D4对称变换)
+16. 严格双门评估 (DELTA_MASS/DELTA_LOOP)
+17. TOMAS 封装层: κ-Snap Export / ℐ-Semantic Feedback Hook / MUS UI Hint / ψ-锚 CLI flag
+18. MNQ-Deep Transformer (MNQComboAttention + MNQCrossLayer + 语法约束解码)
 """
 
 import numpy as np
@@ -24,6 +30,9 @@ from enum import IntEnum
 import math
 import time
 import threading
+import json
+import uuid
+import os
 from collections import deque
 
 # ============================================================================
@@ -1879,6 +1888,117 @@ class FrozenKernelMesh:
             'peak_mass_face': self._peak_mass_face,
         }
 
+    # ========================================================================
+    # TOMAS 封装层 (建议1: κ-Snap Export / 建议2: ℐ-Semantic Feedback)
+    # ========================================================================
+
+    def semantic_feedback(self, related_node_ids=None, enable=True):
+        """
+        ℐ-语义反馈钩子 (TOMAS 建议2)
+        在 run() 结束后自动调用，将 e_obs_mf 反馈给 TOMAS KB
+        当前为占位接口，标注未来接 TOMAS KB 的调用方式
+        """
+        if not enable:
+            return {'confirm': [], 'disconfirm': [], 'suggest_MUS': False, 'note': 'disabled'}
+
+        reading = self.reader.read() if self.reader else None
+        if not reading:
+            return {'confirm': [], 'disconfirm': [], 'suggest_MUS': False, 'note': 'no_reader'}
+
+        e_obs_mf = {
+            'MASS_FACE': reading.get('MASS_FACE', 0),
+            'LOCAL_COMP_LOOP': reading.get('LOCAL_COMP_LOOP', 0),
+            'BOUNDARY_LEAK': reading.get('BOUNDARY_LEAK', 0),
+            'LOOP_HOLD_13': reading.get('LOOP_HOLD_13', 0),
+            'AXIS_LOOP_OBS': reading.get('AXIS_LOOP_OBS', 0),
+            'DIAG_LOOP_OBS': reading.get('DIAG_LOOP_OBS', 0),
+        }
+
+        strict_result = self.assess_dual_gate()
+        dynamic_result = self.assess_stability()
+
+        suggest_MUS = (dynamic_result.get('passed', False) and not strict_result.get('passed', False))
+
+        feedback = {
+            'e_obs_mf': e_obs_mf,
+            'strict_gate': strict_result,
+            'dynamic_gate': dynamic_result,
+            'suggest_MUS': suggest_MUS,
+            'related_node_ids': related_node_ids or [],
+            'note': '占位接口 — 未来接 TOMAS KB.semantic_backprop_on_mass_precursor()',
+        }
+
+        print(f"[ℐ-Semantic Feedback] MASS_FACE={e_obs_mf['MASS_FACE']:.4f}, "
+              f"strict={strict_result.get('passed')}, dynamic={dynamic_result.get('passed')}, "
+              f"suggest_MUS={suggest_MUS}")
+
+        return feedback
+
+    def run(self, steps: int, enable_kappa_snap=True, enable_semantic_feedback=True):
+        """运行指定步数并返回最终读数 (modified for TOMAS)"""
+        last_reading = None
+        for _ in range(steps):
+            last_reading = self.step()
+
+        if enable_kappa_snap:
+            kappa_snap_export(self)
+
+        if enable_semantic_feedback:
+            self.semantic_feedback()
+
+        return last_reading
+
+
+def kappa_snap_export(mesh: FrozenKernelMesh, out_dir: str = './snaps') -> dict:
+    """
+    κ-Snap Export (TOMAS 建议1)
+    每次 run() 结束后自动写 JSON 快照
+    快照格式遵循 TOMAS 裁决文档定义
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    reading = mesh.reader.read() if mesh.reader else {}
+    strict_result = mesh.assess_dual_gate()
+    dynamic_result = mesh.assess_stability()
+
+    snap_id = str(uuid.uuid4())
+    prev_snap_id = None
+    snap_index_path = os.path.join(out_dir, '_latest_snap_id.txt')
+    if os.path.exists(snap_index_path):
+        with open(snap_index_path, 'r') as f:
+            prev_snap_id = f.read().strip()
+
+    snap_data = {
+        'snap_id': snap_id,
+        'prev_snap_id': prev_snap_id,
+        'cited_ref': {
+            'kernel_sha256': FROZEN_KERNEL_FINGERPRINT,
+            'bg_seed': mesh.seed,
+            'init_phi': {'pts': 5, 'sgn': '+', 'ampl': 0.3},
+            'observer': 'D4_cov_v1',
+        },
+        'git_commit': '3806c5c',
+        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'e_obs_mf': {
+            'MASS_FACE': reading.get('MASS_FACE', 0),
+            'LOOP': mesh.loop_history[-10:] if mesh.loop_history else [],
+            'LEAK': [reading.get('BOUNDARY_LEAK', 0)],
+            'HOLD': [reading.get('LOOP_HOLD_13', 0)],
+            'strict_gate': 'PASS' if strict_result.get('passed') else 'FAIL',
+            'dynamic_gate': 'PASS' if dynamic_result.get('passed') else 'FAIL',
+        }
+    }
+
+    snap_file = os.path.join(out_dir, f"snap_{snap_id}.json")
+    with open(snap_file, 'w', encoding='utf-8') as f:
+        json.dump(snap_data, f, ensure_ascii=False, indent=2)
+
+    with open(snap_index_path, 'w') as f:
+        f.write(snap_id)
+
+    print(f"[κ-Snap] Exported: {snap_file}")
+    return snap_data
+
 
 # ============================================================================
 # 导出清单
@@ -1901,4 +2021,6 @@ __all__ = [
     'MNQ8FrozenKernel', 'MassFaceReader', 'DynamicStabilityGate',
     'StrictDualGate', 'D4CovariantObserver', 'FrozenKernelMesh',
     'mnq8_frozen_kernel_verify', 'FROZEN_KERNEL_FINGERPRINT',
+    # v3.1 TOMAS 封装层
+    'kappa_snap_export',
 ]

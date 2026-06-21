@@ -6,6 +6,53 @@
 
 ---
 
+## [3.1.0] — 2026-06-21
+
+### 新增
+
+#### TOMAS 封装层 (mnq_core.py + mnq_dashboard.py)
+
+- **建议1: κ-Snap Export**: `kappa_snap_export()` 函数
+  - 每次 `FrozenKernelMesh.run()` 结束后自动写 JSON 快照
+  - 快照格式遵循 TOMAS 裁决文档定义（`snap_id`, `prev_snap_id`, `cited_ref`, `e_obs_mf`）
+  - 保存至 `./snaps/` 目录
+- **建议2: ℐ-Semantic Feedback Hook**: `FrozenKernelMesh.semantic_feedback()` 方法
+  - 占位接口，标注未来接 TOMAS KB 的调用方式
+  - 在 `run()` 结束后自动调用（可通过参数关闭）
+- **建议3: MUS 双存 UI Hint**: `mnq_dashboard.py` GUI 提示
+  - 当严格双门 FAIL 但动态门 PASS 时（暂态闭合）
+  - 弹出 `messagebox.askyesno()` 提示，用户选择后写入 `./mus/` 目录（JSON）
+- **建议4: ψ-锚 CLI flag**: （计划中实现）
+  - CLI 模式新增 `--comply-psi-anchor` flag
+  - 启用时：强制输出所有情况（含 collapse case、negative 结果），不 suppress
+- **建议5: CGD ⇔ TOMAS Axiom 映射文档**: 新增 `CGD_TOMAS_MAPPING.md`
+  - CGD_A1→TOMAS A1(ℐ-守恒)，CGD_A2→TOMAS A2(κ-Snap)
+  - CGD_A3→刘机制 ArgMin S_Rel，CGD_A4/A5 对应关系分析
+
+#### MNQ-Deep Transformer (mnq_deep.py — 新文件)
+
+- **MNQComboAttention**: 三驱动力注意力（保护头/服务头/稳定头）
+- **MNQComboLayer**: 层间衰减残差 + Ω-φ 动力学
+- **MNQComboTransformer**: 完整的 Combo Transformer（6层）
+- **MNQCrossLayer**: 跨层 Ω 传递
+- **MNQCrossTransformer**: 跨层 Ω Transformer（6层）
+- **语法约束解码**: `generate()` 函数支持 `syntax_constraint=True`（括号匹配、缩进一致性、禁止连续换行）
+- **基线对比**: `StandardTransformer` 实现
+
+### 变更
+
+- `mnq_core.py` 版本头: v2.0 → v3.1
+- `mnq_core.py` 新增导入: `json`, `uuid`, `os`
+- `mnq_core.py` 新增函数: `kappa_snap_export()`
+- `mnq_core.py` 修改类: `FrozenKernelMesh` 新增 `semantic_feedback()` 方法，`run()` 修改为调用新函数
+- `mnq_core.py` `__all__` 更新: 新增 `kappa_snap_export`
+- `mnq_dashboard.py` 版本头: v3.0 → v3.1
+- `mnq_dashboard.py` 新增导入: `json`, `uuid`, `os`
+- `mnq_dashboard.py` 修改方法: `_fk_step()` 新增 MUS UI 提示
+- 新增文件: `mnq_deep.py` (~500行), `CGD_TOMAS_MAPPING.md`
+
+---
+
 ## [3.0.0] — 2026-06-04
 
 ### 新增

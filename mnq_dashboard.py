@@ -32,6 +32,9 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import time
 import threading
+import json
+import uuid
+import os
 from collections import deque
 
 from mnq_core import (
@@ -850,13 +853,39 @@ class MNQDashboard:
     # ---- v3.0 冻结核操作 ----
 
     def _fk_step(self):
-        """冻结核单步演化"""
+        """冻结核单步演化（含 MUS UI 提示）"""
         self.fk_mesh.step()
         r = self.fk_mesh.reader.read()
         self.fk_mass_face_history.append(r['MASS_FACE'])
         self.fk_loop_history.append(r['LOCAL_COMP_LOOP'])
         self._log(f"冻结核 Step {self.fk_mesh.kernel.step_count}: "
                   f"MF={r['MASS_FACE']:.4f} LOOP={r['LOCAL_COMP_LOOP']:.4f}")
+
+        # TOMAS 建议3: MUS 双存 UI Hint
+        strict_result = self.fk_mesh.assess_dual_gate()
+        dynamic_result = self.fk_mesh.assess_stability()
+        if dynamic_result.get('passed') and not strict_result.get('passed'):
+            self._log("⚠️ 检测到暂态闭合（dynamic_gate=PASS, strict_gate=FAIL）")
+            if messagebox.askyesno("MUS 双存提示",
+                                 "检测到暂态闭合（dynamic_gate=PASS, strict_gate=FAIL）\n\n"
+                                 "解读 A：未充分闭合，拒绝\n"
+                                 "解读 B：瞬态盆值保留，记录\n\n"
+                                 "是否标记为 MUS 弱质量前体候选？"):
+                mus_record = {
+                    'snap_id': str(uuid.uuid4()),
+                    'reason': 'transient_basin_M2_ANTI_W3',
+                    'strict_gate': strict_result,
+                    'dynamic_gate': dynamic_result,
+                    'mass_face': r['MASS_FACE'],
+                    'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                }
+                mus_dir = './mus'
+                os.makedirs(mus_dir, exist_ok=True)
+                mus_file = os.path.join(mus_dir, f"mus_{mus_record['snap_id']}.json")
+                with open(mus_file, 'w', encoding='utf-8') as f:
+                    json.dump(mus_record, f, ensure_ascii=False, indent=2)
+                self._log(f"[MUS] 已记录弱质量前体候选: {mus_file}")
+
         self._refresh_all_plots()
 
     def _fk_reset(self):
