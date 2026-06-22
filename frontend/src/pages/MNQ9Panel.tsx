@@ -65,9 +65,17 @@ export default function MNQ9Panel() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
+      <Typography variant="h5" sx={{ color: '#1890ff', mb: 1 }}>
         MNQ9 信心核
       </Typography>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #faad14' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          四策略预测器 — 多头（bull）、空头（bear）、危机预警（crisis）、对冲（hedge）。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          基于 Omega 参数和 B_conf 信心度计算各策略强度。切换场景可模拟不同市场条件下的策略表现。
+        </Typography>
+      </Card>
 
       {/* Confidence Gauge */}
       <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3 }}>

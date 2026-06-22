@@ -42,9 +42,17 @@ export default function FrozenKernelPanel() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
+      <Typography variant="h5" sx={{ color: '#1890ff', mb: 1 }}>
         FrozenKernel 演化面板
       </Typography>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #00d4ff' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          冻结核演化引擎 — MNQ 核心模块，负责 MNQ 场的 8×8 网格演化。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          严格门控（StrictGate）判定质量面+多余环+对消轴环是否同时满足；动态门控（DynamicGate）根据约束违反度动态调整阈值。D4 审计执行 8 种 D4 变换检测协变性（L1_diff 全零 = 完美协变）。
+        </Typography>
+      </Card>
 
       {/* Top: Status Cards */}
       <Grid container spacing={2} sx={{ mb: 3 }}>

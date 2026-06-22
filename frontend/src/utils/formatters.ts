@@ -11,12 +11,14 @@ export function formatTimestamp(ts: string): string {
 }
 
 export function formatNumber(val: number, digits = 4): string {
+  if (val == null || !isFinite(val)) return 'N/A';
   if (val === 0) return '0';
-  if (Math.abs(val) < 0.001) return val.toExponential(digits);
+  if (Math.abs(val) < 0.001 && val !== 0) return val.toExponential(digits);
   return val.toFixed(digits);
 }
 
 export function formatPercent(val: number): string {
+  if (val == null || !isFinite(val)) return 'N/A';
   return `${(val * 100).toFixed(1)}%`;
 }
 

@@ -43,9 +43,17 @@ export default function CGDPanel() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
+      <Typography variant="h5" sx={{ color: '#1890ff', mb: 1 }}>
         约束动力学 (CGD)
       </Typography>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #ff4d4f' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          约束驱动动力学（Constraint-Guided Dynamics） — 通过约束违反度监控和反馈回路维持系统稳定。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          红色 = 约束违反 | 绿色 = 约束满足。违反度越高说明系统越不稳定，CGD 引擎会自动调整状态向量以降低违反度。
+        </Typography>
+      </Card>
 
       {/* Violation Gauge */}
       <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3 }}>
@@ -66,7 +74,7 @@ export default function CGDPanel() {
           </Typography>
           <Card sx={{ backgroundColor: '#0f3460', maxHeight: 400, overflow: 'auto' }}>
             <List>
-              {status?.constraints.map((c, i) => (
+              {(status?.constraints || []).map((c, i) => (
                 <ListItem key={i} sx={{ borderBottom: '1px solid #16213e' }}>
                   <ListItemIcon>
                     {c.satisfied ? (

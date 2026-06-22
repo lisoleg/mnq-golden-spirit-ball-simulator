@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Box, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Dialog, DialogTitle, DialogContent, DialogActions, Chip } from '@mui/material';
+import { Box, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Dialog, DialogTitle, DialogContent, DialogActions, Chip, Card } from '@mui/material';
 import { useExperimentStore } from '../store/experimentStore';
 import { CHART_COLORS } from '../theme';
 import { formatTimestamp, statusColor } from '../utils/formatters';
@@ -44,9 +44,17 @@ export default function ExperimentHistory() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
+      <Typography variant="h5" sx={{ color: '#1890ff', mb: 1 }}>
         实验历史
       </Typography>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #13c2c2' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          已运行实验的完整历史记录。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          包含实验名称、参数配置、运行时长、最终状态。点击「详情」查看实验输出数据，底部图表展示已完成实验的得分对比。
+        </Typography>
+      </Card>
 
       {/* History Table */}
       <TableContainer component={Paper} sx={{ backgroundColor: '#0f3460', mb: 3 }}>

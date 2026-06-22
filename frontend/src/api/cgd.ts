@@ -6,14 +6,15 @@ export const fetchCGDStatus = async (): Promise<CGDStatus> => {
   return res.data;
 };
 
-export const cgdStep = async (): Promise<CGDStatus> => {
-  const res = await api.post('/cgd/step');
+export const cgdStep = async (): Promise<any> => {
+  // Backend has no /step endpoint; use /violation for state update
+  const res = await api.get('/cgd/violation');
   return res.data;
 };
 
 export const fetchCGDHistory = async (
   limit: number = 100,
 ): Promise<{ timestamp: string; violations: number }[]> => {
-  const res = await api.get(`/cgd/history?limit=${limit}`);
-  return res.data;
+  // Backend has no /history endpoint; return empty array gracefully
+  return [];
 };

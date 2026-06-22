@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Box, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Dialog, DialogTitle, DialogContent, DialogActions, IconButton } from '@mui/material';
+import { Box, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Card } from '@mui/material';
 import { Delete, Download, Visibility } from '@mui/icons-material';
 import * as kappaApi from '../api/kappa';
 import type { Snapshot, KappaSnapshotDetail } from '../api/types';
@@ -62,9 +62,17 @@ export default function KappaBrowser() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
+      <Typography variant="h5" sx={{ color: '#1890ff', mb: 1 }}>
         κ-Snap 快照浏览器
       </Typography>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #9254de' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          TOMAS 协议快照管理 — 可验证输出系统。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          查看/下载/删除历次实验的 κ 快照。每个快照包含 SHA256 指纹和 Merkle 链，确保输出不可篡改。支持 JSON 格式导出。
+        </Typography>
+      </Card>
 
       <TableContainer component={Paper} sx={{ backgroundColor: '#0f3460' }}>
         <Table>

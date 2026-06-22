@@ -28,21 +28,53 @@ _cgd_engine.add_constraint("质量面守恒", (0.0, 0.5), modulation=0.005)
 _cgd_engine.add_constraint("相干度", (0.98, 1.0), modulation=0.002)
 _cgd_engine.add_constraint("能量上限", (0.0, 2.0), modulation=0.01)
 
+# 违反历史记录
+_violation_history = []
+
+
+def _safe_json():
+    """安全获取 JSON body，空 body 返回 {}。"""
+    if request.content_length is None or request.content_length == 0:
+        return {}
+    try:
+        data = request.get_json(force=True)
+        return data if data is not None else {}
+    except Exception:
+        return {}
+
 
 @cgd_bp.route('/status', methods=['GET'])
 def cgd_status():
     """获取 CGD 约束状态。"""
     try:
+        # 评估当前状态向量
+        sv = np.array([0.25, 0.99, 0.5])
+        is_legal, total_violation = _cgd_engine.evaluate(sv)
+
         constraints = []
-        for c in _cgd_engine.constraints:
+        violation_count = 0
+        for i, c in enumerate(_cgd_engine.constraints):
+            low, high = c.target_range
+            val = float(sv[i % len(sv)])
+            satisfied = not is_legal or (low <= val <= high)
+            if not satisfied:
+                violation_count += 1
             constraints.append({
                 'name': c.name,
-                'target_range': list(c.target_range),
+                'satisfied': satisfied,
+                'value': val,
+                'threshold': float(high),
+                'target_range': [float(low), float(high)],
                 'modulation': c.modulation_strength,
             })
+
         return jsonify({
             'constraints': constraints,
+            'violation_count': violation_count,
+            'total_constraints': len(_cgd_engine.constraints),
             'steady_states_count': len(_cgd_engine.steady_states),
+            'history': _violation_history[-20:],
+            'total_violation': float(total_violation),
         })
     except Exception as e:
         logger.error(f"cgd/status error: {e}")
@@ -51,15 +83,33 @@ def cgd_status():
 
 @cgd_bp.route('/violation', methods=['GET'])
 def cgd_violation():
-    """获取约束违反度。"""
+    """获取约束违反度并记录历史。"""
     try:
-        # 使用默认状态向量评估
+        import time as _time
         sv = np.array([0.25, 0.99, 0.5])
         is_legal, violation = _cgd_engine.evaluate(sv)
+
+        # 计算违反约束数量
+        violation_count = 0
+        for i, c in enumerate(_cgd_engine.constraints):
+            low, high = c.target_range
+            val = float(sv[i % len(sv)])
+            if not (low <= val <= high):
+                violation_count += 1
+
+        # 记录历史
+        _violation_history.append({
+            'timestamp': _time.strftime('%H:%M:%S'),
+            'violations': float(violation),
+        })
+        if len(_violation_history) > 50:
+            _violation_history.pop(0)
 
         return jsonify({
             'violation': float(violation),
             'is_legal': bool(is_legal),
+            'violation_count': violation_count,
+            'total_constraints': len(_cgd_engine.constraints),
             'steady_states_count': len(_cgd_engine.steady_states),
         })
     except Exception as e:

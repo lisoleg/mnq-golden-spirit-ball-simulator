@@ -6,7 +6,80 @@
 
 ---
 
-## [3.1.0] — 2026-06-21
+## [3.2.0] — 2026-06-22
+
+### 新增
+
+#### Web 仪表盘 v4.0 (backend/ + frontend/)
+
+- **Flask 后端 API**: 11 个 Blueprint, 44 条 REST 路由
+  - 实验管理、FrozenKernel、MASS_FACE、SCF、CGD、MNQ9、MNQ-Deep、κ-Snap、金灵球网格、刘机制、MNQ Cloud
+  - SSE (Server-Sent Events) 实时进度推送
+  - 静态文件托管 (生产模式下托管 Vite 构建产物)
+- **React 前端 SPA**: Vite + React 18 + MUI + Tailwind CSS + Recharts + Zustand
+  - 10 个功能面板: FrozenKernel / MASS_FACE / SCF / CGD / MNQ9 / MNQ-Deep / κ-Snap / 实验运行器 / 实验历史 / 使用文档
+  - 暗色科技主题 (深紫黑背景 + 科技蓝强调)
+  - GaugeChart 仪表盘组件、实时图表、SSE 进度条
+
+#### DeepSeek Chat API 集成
+
+- `backend/api/deep.py` 重构：从 mock/本地 PyTorch 改为调用 DeepSeek Chat API
+  - API 端点: `https://api.deepseek.com/v1/chat/completions`
+  - 模型: `deepseek-chat`
+  - System prompt 设定 MNQ 金符学理论上下文
+  - 保留 MNQ 后处理管线（语法检查、香农熵、κ签名）
+  - 新增依赖: `requests>=2.31`
+
+#### UI 使用文档
+
+- **Documentation.tsx**: 完整 Web UI 使用文档页面
+  - 项目概述、10 个模块说明、快速上手指南、术语表
+- **9 个面板页**: 各增加解释说明 Card/Alert，降低使用门槛
+- **导航优化**: 侧边栏新增"首页"和"使用文档"入口
+
+### 修复
+
+#### 前后端 API 契约修复 (9 个模块)
+
+- `frontend/src/api/experiment.ts`: `fetchExperiments` 解包逻辑 (`res.data.experiments ?? res.data`)；`runExperiment` URL 修正为 `POST /experiment/run`
+- `frontend/src/api/kappa.ts`: 全部 URL 修正 (`/snapshots`→`/list`等)
+- `frontend/src/api/massface.ts`: `/readings`→`/read`，history 数据展开
+- `frontend/src/api/scf.ts`: `run_to_convergence`→`run-to-convergence`
+- `frontend/src/api/cgd.ts`: `/step`→`/violation`
+- `frontend/src/api/kernel.ts`: `d4_audit`→`d4-audit`
+- `frontend/src/api/mnq9.ts`: `/simulate`→`/run-series`
+- `frontend/src/api/mesh.ts`: 端点 URL 全面修正
+- `frontend/src/api/deep.ts`: `seed_text`→`start_text`
+
+#### 前端运行时错误修复
+
+- `frontend/src/utils/formatters.ts`: `formatNumber`/`formatPercent` 添加 `null`/`NaN` 守卫，返回 `"N/A"` 而非崩溃
+- `frontend/src/components/GaugeChart.tsx`: `value` 兜底为 0 防止 `toFixed` 报错
+- `frontend/src/pages/CGDPanel.tsx`: `constraints.map` 添加可选链 `?.` 防止空数组崩溃
+- `frontend/src/pages/ExperimentRunner.tsx`: progress 进度非空检查
+
+#### 后端 500 错误修复
+
+- `backend/api/scf.py`: `/step` 和 `/run-to-convergence` 处理空 POST body
+- `backend/api/cgd.py`: 响应字段名对齐前端期望 (`violation_count`→`violation`，添加 constraints 数组字段)
+- `backend/api/deep.py`: 修复中文引号导致的语法错误
+
+### 文档更新
+
+- **README.md**: 版本升至 v3.2，新增 Web 仪表盘、DeepSeek、技术栈章节
+- **USER_GUIDE.md**: 新增 Web 仪表盘使用章节
+- **PAPER.md**: 新增 Web 仪表盘架构 + DeepSeek 集成章节
+- **ARCHITECTURE_WEB.md**: 更新 DeepSeek 集成说明
+- **CHANGELOG.md**: 本条目
+
+### 变更
+
+- `backend/api/deep.py`: 行数 ~80 → ~230+ (DeepSeek API 集成)
+- `backend/requirements.txt`: 新增 `requests>=2.31`
+- 前端 API 模块: 9 个文件全面修正 URL 和解包逻辑
+- 10 个前端页面: 各增加解释说明组件
+
+---
 
 ### 新增
 
@@ -223,11 +296,13 @@
 
 ## 版本对照
 
-| 维度 | v1.0 | v2.0 | v3.0 |
-|------|------|------|------|
-| 核心引擎行数 | ~600 | ~1050 | ~1600+ |
-| 仪表盘行数 | ~400 | ~650 | ~850+ |
-| 模块数 | 7 | 11 (+SCF/CGD/Feedback/MNQ9) | 16 (+冻结核5模块) |
-| CLI 实验数 | 8 | 12 | 18 |
-| 文档数 | 1 (README) | 6 (全套) | 6 (全套) |
-| 测试通过率 | 3/3 | 12/12 | 18/18 |
+| 维度 | v1.0 | v2.0 | v3.0 | v3.2 |
+|------|------|------|------|------|
+| 核心引擎行数 | ~600 | ~1050 | ~1600+ | ~2000+ |
+| 仪表盘行数 | ~400 | ~650 | ~850+ | ~850+ (tkinter) + ~2000+ (Flask API) + ~3000+ (React) |
+| 模块数 | 7 | 11 (+SCF/CGD/Feedback/MNQ9) | 16 (+冻结核5模块) | 27 (+Web 前后端 11 模块) |
+| CLI 实验数 | 8 | 12 | 18 | 18 |
+| 文档数 | 1 (README) | 6 (全套) | 6 (全套) | 10 (全套 + Web) |
+| 操作模式 | CLI | CLI + GUI | CLI + tkinter GUI | CLI + tkinter GUI + Web 仪表盘 |
+| LLM 集成 | — | — | — | DeepSeek Chat API |
+| 测试通过率 | 3/3 | 12/12 | 18/18 | 47/47 (Web 后端) |

@@ -3,14 +3,15 @@ import type { Experiment, ExperimentResult, HistoryEntry } from './types';
 
 export const fetchExperiments = async (): Promise<Experiment[]> => {
   const res = await api.get('/experiment/list');
-  return res.data;
+  // Backend returns { experiments: [...] }
+  return res.data.experiments ?? res.data;
 };
 
 export const runExperiment = async (
   id: string,
   params: Record<string, any>,
 ): Promise<{ task_id: string }> => {
-  const res = await api.post(`/experiment/run/${id}`, params);
+  const res = await api.post('/experiment/run', { experiment_id: id, params });
   return res.data;
 };
 
@@ -23,7 +24,8 @@ export const fetchExperimentStatus = async (
 
 export const fetchHistory = async (): Promise<HistoryEntry[]> => {
   const res = await api.get('/experiment/history');
-  return res.data;
+  // Backend returns { history: [...] }
+  return res.data.history ?? res.data;
 };
 
 export const fetchHistoryDetail = async (

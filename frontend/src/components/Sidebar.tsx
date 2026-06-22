@@ -1,7 +1,7 @@
 import React from 'react';
 import { List, ListItemButton, ListItemIcon, ListItemText, IconButton, Box } from '@mui/material';
 import {
-  Science, AcUnit, BarChart, Waves, Link,
+  Home, School, Science, AcUnit, BarChart, Waves, Link,
   GpsFixed, Psychology, PhotoCamera, Assignment,
   ChevronLeft, ChevronRight,
 } from '@mui/icons-material';
@@ -10,6 +10,8 @@ import { useUIStore } from '../store/uiStore';
 import { NAV_ITEMS } from '../utils/constants';
 
 const ICON_MAP: Record<string, React.ReactElement> = {
+  home: <Home />,
+  school: <School />,
   science: <Science />,
   ac_unit: <AcUnit />,
   bar_chart: <BarChart />,

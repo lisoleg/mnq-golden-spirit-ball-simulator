@@ -20,11 +20,11 @@ export const kernelReset = async (
 };
 
 export const kernelD4Audit = async (): Promise<any> => {
-  const res = await api.post('/kernel/d4_audit');
+  const res = await api.post('/kernel/d4-audit');
   return res.data;
 };
 
-export const fetchKernelField = async (): Promise<number[][]> => {
-  const res = await api.get('/kernel/field');
+export const fetchKernelField = async (): Promise<any> => {
+  const res = await api.get('/kernel/readings');
   return res.data;
 };

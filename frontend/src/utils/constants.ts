@@ -1,7 +1,9 @@
 export const API_BASE_URL = 'http://localhost:5000/api';
 
 export const NAV_ITEMS = [
-  { path: '/', label: '实验运行器', icon: 'science' },
+  { path: '/', label: '首页', icon: 'home' },
+  { path: '/docs', label: '使用文档', icon: 'school' },
+  { path: '/experiment', label: '实验运行器', icon: 'science' },
   { path: '/kernel', label: 'FrozenKernel', icon: 'ac_unit' },
   { path: '/massface', label: 'MASS_FACE', icon: 'bar_chart' },
   { path: '/scf', label: '三层信息波', icon: 'waves' },

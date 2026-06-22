@@ -5,14 +5,33 @@ export const fetchMeshStatus = async (): Promise<any> => {
   return res.data;
 };
 
-export const meshCompute = async (
-  params: Record<string, any>,
+export const meshStep = async (
+  dt: number = 0.016,
+  steps: number = 1,
 ): Promise<any> => {
-  const res = await api.post('/mesh/compute', params);
+  const res = await api.post('/mesh/step', { dt, steps });
   return res.data;
 };
 
-export const fetchMeshTopology = async (): Promise<any> => {
-  const res = await api.get('/mesh/topology');
+export const meshSeed = async (
+  mode: string = 'background',
+  dim: number = 32,
+): Promise<any> => {
+  const res = await api.post('/mesh/seed', { mode, dim });
+  return res.data;
+};
+
+export const fetchMeshField = async (): Promise<any> => {
+  const res = await api.get('/mesh/field');
+  return res.data;
+};
+
+export const fetchMeshMassFace = async (): Promise<any> => {
+  const res = await api.get('/mesh/mass-face');
+  return res.data;
+};
+
+export const fetchMeshExcessLoop = async (): Promise<any> => {
+  const res = await api.get('/mesh/excess-loop');
   return res.data;
 };

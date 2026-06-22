@@ -42,10 +42,15 @@ export default function SCFPanel() {
   const handleRunToConvergence = async () => {
     setLoading(true);
     try {
-      const results = await scfApi.scfRunToConvergence();
-      if (results.length > 0) {
-        setCurrent(results[results.length - 1]);
-        setHistory((prev) => [...prev.slice(-99), ...results]);
+      const result = await scfApi.scfRunToConvergence();
+      // 后端返回 {steps, converged, snapshot: {core, bagua_mean, hex64_mean, converged}}
+      if (result && result.snapshot) {
+        const snap: SCFSnapshot = {
+          ...result.snapshot,
+          max_change: result.snapshot.max_change ?? 0,
+        };
+        setCurrent(snap);
+        setHistory((prev) => [...prev.slice(-99), snap]);
       }
     } catch (e: any) {
       console.error('SCF run error:', e);
@@ -55,9 +60,17 @@ export default function SCFPanel() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
+      <Typography variant="h5" sx={{ color: '#1890ff', mb: 1 }}>
         三层信息波 (SCF)
       </Typography>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #ff7a45' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          自洽场迭代（Self-Consistent Field） — 三层信息波协同演化。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          核波（原子尺度信息传递）→ 八卦波（中尺度信息编码）→ 64卦波（宏观尺度信息涌现）。点击「运行至收敛」观察三层波如何逐步自洽。
+        </Typography>
+      </Card>
 
       {/* Info Cards */}
       <Grid container spacing={2} sx={{ mb: 3 }}>

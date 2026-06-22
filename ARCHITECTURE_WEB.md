@@ -1,9 +1,9 @@
 # MNQ 金灵球网络仿真器 Web 仪表盘 - 系统架构设计
 
-**版本**: v1.0  
-**日期**: 2026-06-21  
+**版本**: v1.1  
+**日期**: 2026-06-22  
 **架构师**: 高见远（Gao）  
-**项目**: MNQ 金灵球网络仿真器 v3.1 Web 升级版
+**项目**: MNQ 金灵球网络仿真器 v3.2 Web 升级版 (含 DeepSeek API 集成)
 
 ---
 
@@ -112,7 +112,8 @@ graph TB
 1. **轻量级**: Flask 是微框架，适合封装已有 Python 算法模块
 2. **快速开发**: 无需复杂配置，直接 import mnq_core.py 即可使用
 3. **灵活性**: 可以自由组织 API 路由，支持 SSE（Server-Sent Events）
-4. **生态成熟**: 丰富的扩展（flask-cors, flask-sqlalchemy 等）
+4. **生态成熟**: 丰富的扩展（flask-cors 等）
+5. **外部 API 集成**: 通过 `requests` 库轻松集成 DeepSeek Chat API 等外部服务
 
 **替代方案对比**:
 - **FastAPI**: 类型安全、自动生成文档，但需要修改现有代码添加类型注解
@@ -233,13 +234,19 @@ graph TB
 | POST | `/api/mnq9/run-series` | 运行趋势模拟 | `{steps: 60}` | `{omega_series, B_conf_series, report}` |
 | GET | `/api/mnq9/scenario/<name>` | 应用预定义场景 | - | `{macro, events}` |
 
-#### 3.1.7 MNQ-Deep Transformer API
+#### 3.1.7 MNQ-Deep Transformer API (DeepSeek 驱动)
 
 | 方法 | 路径 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| POST | `/api/deep/generate` | 生成文本 | `{start_text, length, temperature, syntax_constraint}` | `{generated_text}` |
-| POST | `/api/deep/train` | 训练模型 | `{dataset_text, epochs, batch_size, lr}` | `{losses}` |
-| GET | `/api/deep/status` | 获取模型状态 | - | `{device, vocab_size, model_loaded}` |
+| POST | `/api/deep/generate` | 调用 DeepSeek Chat API 生成金符学文本 | `{start_text, length, temperature, syntax_constraint}` | `{generated_text, metrics}` |
+| GET | `/api/deep/status` | 获取 API 状态 | - | `{model, max_tokens, api_connected}` |
+
+**DeepSeek 集成架构**:
+- 后端 `backend/api/deep.py` 调用 `https://api.deepseek.com/v1/chat/completions`
+- 模型: `deepseek-chat`
+- System prompt 设定 MNQ 金符学理论上下文（冻结核、阴龙积、八卦算子等）
+- 后处理管线: 语法约束检查 → 香农熵计算 → κ签名生成
+- API Key 通过环境变量或配置文件管理
 
 #### 3.1.8 κ-Snap 浏览器 API
 
@@ -355,6 +362,7 @@ graph TD
     E --> G[MainContent.tsx<br/>主内容区]
     E --> H[TopBar.tsx<br/>顶部状态栏]
     
+    F --> F0[NavItem: 首页]
     F --> F1[NavItem: 实验运行器]
     F --> F2[NavItem: FrozenKernel]
     F --> F3[NavItem: MASS_FACE]
@@ -363,6 +371,7 @@ graph TD
     F --> F6[NavItem: MNQ-Deep]
     F --> F7[NavItem: κ-Snap]
     F --> F8[NavItem: 实验历史]
+    F --> F9[NavItem: 使用文档]
     
     G --> G1[ExperimentRunner.tsx]
     G --> G2[FrozenKernelPanel.tsx]
@@ -373,6 +382,7 @@ graph TD
     G --> G7[DeepPanel.tsx]
     G --> G8[KappaBrowser.tsx]
     G --> G9[ExperimentHistory.tsx]
+    G --> G10[Documentation.tsx]
     
     G1 --> G1a[ExperimentList.tsx<br/>实验列表]
     G1 --> G1b[OutputTerminal.tsx<br/>输出日志终端]
@@ -766,9 +776,8 @@ flask-cors==4.0.0
 # 数据处理 (mnq_core.py 依赖)
 numpy==1.26.2
 
-# （可选）如果启用 MNQ-Deep Transformer
-torch==2.1.0
-torchvision==0.16.0
+# DeepSeek API 集成
+requests==2.31.0
 
 # 工具
 python-dotenv==1.0.0
@@ -777,7 +786,7 @@ python-dotenv==1.0.0
 **说明**:
 - `flask-cors`: 解决跨域问题（前端 `localhost:5173` → 后端 `localhost:5000`）
 - `numpy`: `mnq_core.py` 的核心依赖
-- `torch`: 仅在使用 MNQ-Deep Transformer 时需要
+- `requests`: DeepSeek Chat API 调用
 
 ### 8.2 前端依赖 (Node.js)
 
@@ -1018,22 +1027,21 @@ const useSSE = (url: string) => {
 3. **模块化**: 后端 API 按功能拆分 Blueprint，前端组件按页面拆分
 4. **类型安全**: TypeScript 类型定义，前后端数据共享类型
 5. **可扩展**: 预留 P1/P2 功能接口，便于后续迭代
+6. **外部 AI 集成**: DeepSeek Chat API 驱动的 MNQ-Deep 金符学文本生成
 
-### 11.2 开发优先级
+### 11.2 开发状态
 
-**P0 (必须实现)**:
-- T001-T007: 后端 API 全部完成
-- T008-T013: 前端基础 + FrozenKernel + MASS_FACE 面板
-- T016-T018: 集成测试 + 打包部署
+**已完成 (v4.0)**:
+- 全部后端 API (11 Blueprint, 44 路由)
+- 全部前端页面 (10 面板)
+- DeepSeek API 集成
+- 内置使用文档 (Documentation.tsx)
+- 前后端联调通过 (47/47 tests PASS)
 
-**P1 (应实现)**:
-- T014: SCF/CGD/MNQ9/Deep 面板
-- T015: κ-Snap 浏览器 + 实验历史
-
-**P2 (可延后)**:
+**P1 (可迭代)**:
 - 3D 可视化
 - 移动端适配
-- 报告生成
+- 报告生成 (PDF/PPTX)
 
 ### 11.3 下一步行动
 

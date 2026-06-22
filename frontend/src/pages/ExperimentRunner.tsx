@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { Box, Card, CardContent, Typography, Button, LinearProgress, Grid, TextField } from '@mui/material';
-import { PlayArrow } from '@mui/icons-material';
+import { PlayArrow, School } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 import OutputTerminal from '../components/OutputTerminal';
 import { useExperimentStore } from '../store/experimentStore';
 import { SSE_BASE_URL } from '../utils/constants';
 
 export default function ExperimentRunner() {
+  const navigate = useNavigate();
   const { experiments, loading } = useExperimentStore();
   const fetchExperiments = useExperimentStore((s) => s.fetchExperiments);
   const runExperiment = useExperimentStore((s) => s.runExperiment);
@@ -78,9 +80,28 @@ export default function ExperimentRunner() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
-        实验运行器
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+        <Typography variant="h5" sx={{ color: '#1890ff' }}>
+          实验运行器
+        </Typography>
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<School />}
+          onClick={() => navigate('/docs')}
+          sx={{ color: '#ffd700', borderColor: '#ffd700', '&:hover': { borderColor: '#ffd700', backgroundColor: '#ffd70015' } }}
+        >
+          使用文档
+        </Button>
+      </Box>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #1890ff' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          运行 18 项预定义仿真实验，实时查看 SSE 日志输出与进度。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          左侧选择实验 → 右侧配置 JSON 参数 → 点击「运行实验」即可。进度条和终端输出显示实时状态。
+        </Typography>
+      </Card>
 
       <Grid container spacing={3}>
         {/* Left: Experiment List */}
@@ -177,7 +198,7 @@ export default function ExperimentRunner() {
                     }}
                   />
                   <Typography variant="caption" sx={{ color: '#888' }}>
-                    进度: {progress.toFixed(1)}%
+                    进度: {(progress ?? 0).toFixed(1)}%
                   </Typography>
                 </Box>
               )}

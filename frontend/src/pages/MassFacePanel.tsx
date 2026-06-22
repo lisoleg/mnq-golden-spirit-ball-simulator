@@ -30,9 +30,17 @@ export default function MassFacePanel() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
+      <Typography variant="h5" sx={{ color: '#1890ff', mb: 1 }}>
         MASS_FACE 面板
       </Typography>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #52c41a' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          质量面读数面板 — 显示 MNQ 场的五个核心质量指标。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          MASS_FACE（质量面） | LOCAL_COMP_LOOP（局部完备回路） | LOOP_HOLD_13（环路保持13） | BOUNDARY_LEAK（边界泄漏） | DIAG_MINUS_AXIS_LOOP（对角减轴环）。数值越大表示质量面越活跃，越接近 0 表示死零态。
+        </Typography>
+      </Card>
 
       {/* Gauge */}
       <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3 }}>

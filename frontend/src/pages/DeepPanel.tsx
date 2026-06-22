@@ -43,9 +43,17 @@ export default function DeepPanel() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ color: '#1890ff', mb: 3 }}>
+      <Typography variant="h5" sx={{ color: '#1890ff', mb: 1 }}>
         MNQ-Deep 深度生成
       </Typography>
+      <Card sx={{ backgroundColor: '#16213e', p: 2, mb: 3, borderLeft: '4px solid #eb2f96' }}>
+        <Typography variant="body1" sx={{ color: '#e0e0e0', mb: 0.5 }}>
+          接入 DeepSeek API 的文本生成模块 — 基于 MNQ 理论框架生成回答。
+        </Typography>
+        <Typography variant="body2" sx={{ color: '#888' }}>
+          输入种子文本 → 调整长度和温度 → 点击生成。DeepSeek 会基于金符学、阴龙积、八卦算子、冻结核等 MNQ 理论生成回答。语法有效性、熵值、κ 签名同步计算。
+        </Typography>
+      </Card>
 
       <Grid container spacing={3}>
         <Grid item xs={5}>

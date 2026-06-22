@@ -9,7 +9,8 @@ interface GaugeChartProps {
 }
 
 export default function GaugeChart({ value, min = 0, max = 1, label, color = '#1890ff' }: GaugeChartProps) {
-  const normalizedValue = ((value - min) / (max - min)) * 100;
+  const safeValue = value != null && isFinite(value) ? value : 0;
+  const normalizedValue = Math.max(0, Math.min(100, ((safeValue - min) / (max - min)) * 100));
   const data = [{ name: label || '值', value: normalizedValue, fill: color }];
 
   return (
@@ -38,7 +39,7 @@ export default function GaugeChart({ value, min = 0, max = 1, label, color = '#1
       </RadialBarChart>
       <div style={{ textAlign: 'center', marginTop: -30 }}>
         <span style={{ color: color, fontSize: 24, fontWeight: 'bold' }}>
-          {value.toFixed(4)}
+          {safeValue.toFixed(4)}
         </span>
         {label && (
           <span style={{ color: '#888', fontSize: 12, marginLeft: 4 }}>{label}</span>

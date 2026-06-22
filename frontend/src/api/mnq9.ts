@@ -9,14 +9,14 @@ export const fetchMNQ9Status = async (): Promise<MNQ9Status> => {
 export const mnq9RunSimulation = async (
   scenario: string,
   params: Record<string, any>,
-): Promise<MNQ9Status> => {
-  const res = await api.post('/mnq9/simulate', { scenario, ...params });
+): Promise<any> => {
+  const res = await api.post('/mnq9/run-series', { steps: params.steps ?? 60, ...params });
   return res.data;
 };
 
 export const fetchMNQ9History = async (
   limit: number = 100,
 ): Promise<MNQ9Status[]> => {
-  const res = await api.get(`/mnq9/history?limit=${limit}`);
-  return res.data;
+  // Backend has no /history endpoint; return empty array gracefully
+  return [];
 };

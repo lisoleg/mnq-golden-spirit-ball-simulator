@@ -11,14 +11,14 @@ export const scfStep = async (): Promise<SCFSnapshot> => {
   return res.data;
 };
 
-export const scfRunToConvergence = async (): Promise<SCFSnapshot[]> => {
-  const res = await api.post('/scf/run_to_convergence');
+export const scfRunToConvergence = async (): Promise<any> => {
+  const res = await api.post('/scf/run-to-convergence');
   return res.data;
 };
 
 export const fetchSCFHistory = async (
   limit: number = 100,
 ): Promise<SCFSnapshot[]> => {
-  const res = await api.get(`/scf/history?limit=${limit}`);
-  return res.data;
+  // Backend has no /history endpoint; return empty array gracefully
+  return [];
 };

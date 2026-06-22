@@ -24,6 +24,17 @@ scf_bp = Blueprint('scf', __name__)
 _scf_wave = ThreeLayerInfoWave(core_init=0.001)
 
 
+def _safe_json():
+    """安全获取 JSON body，空 body 返回 {}。"""
+    if request.content_length is None or request.content_length == 0:
+        return {}
+    try:
+        data = request.get_json(force=True)
+        return data if data is not None else {}
+    except Exception:
+        return {}
+
+
 @scf_bp.route('/status', methods=['GET'])
 def scf_status():
     """获取 SCF 当前状态。"""
@@ -41,16 +52,16 @@ def scf_status():
         return jsonify({'error': str(e)}), 500
 
 
-@scf_bp.route('/step', methods=['POST'])
+@scf_bp.route('/step', methods=['POST', 'GET'])
 def scf_step():
     """
-    执行 SCF 迭代。
+    执行 SCF 迭代。支持 POST（带 body）和 GET（默认 1 步）。
 
-    请求体: {steps: int}
-    响应: {snapshot, max_change}
+    请求体 (POST): {steps: int}
+    响应: {core, bagua_mean, hex64_mean, converged, max_change}
     """
     try:
-        data = request.get_json(force=True) or {}
+        data = _safe_json()
         steps = data.get('steps', 1)
 
         max_change = 0.0
@@ -60,7 +71,10 @@ def scf_step():
 
         snap = _scf_wave.snapshot()
         return jsonify({
-            'snapshot': snap,
+            'core': snap['core'],
+            'bagua_mean': snap['bagua_mean'],
+            'hex64_mean': snap['hex64_mean'],
+            'converged': snap['converged'],
             'max_change': max_change,
         })
     except Exception as e:
@@ -68,21 +82,21 @@ def scf_step():
         return jsonify({'error': str(e)}), 500
 
 
-@scf_bp.route('/run-to-convergence', methods=['POST'])
+@scf_bp.route('/run-to-convergence', methods=['POST', 'GET'])
 def scf_run_to_convergence():
     """
-    运行 SCF 到收敛。
+    运行 SCF 到收敛。支持 POST（带 body）和 GET。
 
-    请求体: {max_steps: int, epsilon: float}
-    响应: {steps, converged, snapshot}
+    请求体: {max_steps: int, epsilon: float, core_init: float}
+    响应: {steps, converged, snapshot: {core, bagua_mean, hex64_mean, converged}}
     """
     try:
         global _scf_wave
-        data = request.get_json(force=True) or {}
+        data = _safe_json()
         max_steps = data.get('max_steps', 300)
         epsilon = data.get('epsilon', 1e-6)
-
         core_init = data.get('core_init', 0.001)
+
         _scf_wave = ThreeLayerInfoWave(core_init=core_init)
 
         steps = _scf_wave.run_to_convergence(max_steps=max_steps, epsilon=epsilon)

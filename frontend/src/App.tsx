@@ -11,6 +11,7 @@ import MNQ9Panel from './pages/MNQ9Panel';
 import DeepPanel from './pages/DeepPanel';
 import KappaBrowser from './pages/KappaBrowser';
 import ExperimentHistory from './pages/ExperimentHistory';
+import Documentation from './pages/Documentation';
 
 function App() {
   return (
@@ -20,6 +21,8 @@ function App() {
         <Routes>
           <Route path="/" element={<Layout />}>
             <Route index element={<ExperimentRunner />} />
+            <Route path="experiment" element={<ExperimentRunner />} />
+            <Route path="docs" element={<Documentation />} />
             <Route path="kernel" element={<FrozenKernelPanel />} />
             <Route path="massface" element={<MassFacePanel />} />
             <Route path="scf" element={<SCFPanel />} />
